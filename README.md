@@ -35,21 +35,7 @@
 ---
 
 ## 🏗️ Architecture
-User <-> Frontend (React, Vercel)
-|
-v
-Backend API (FastAPI, Railway/Render)
-|
-v
-+----------------------------+
-| LangChain Agent |
-| - Retrieval tool (Pinecone)|
-| - LLM (OpenAI GPT) |
-+----------------------------+
-|
-v
-Pinecone Vector DB (Cloud)
-
+![image](https://github.com/user-attachments/assets/5ddb6149-a73a-4607-9f60-985b52d44e1c)
 
 **Flow:**
 1. **User uploads a doc** → backend splits and embeds → stored in Pinecone
