@@ -2,30 +2,29 @@
 
 from pinecone import Pinecone
 
-from config import PINECONE_API_KEY, PINECONE_INDEX_NAME
+from config import PINECONE_API_KEY, PINECONE_INDEX_NAME, EMBEDDING_MODEL
 
 pc = Pinecone(api_key=PINECONE_API_KEY)
 
 if not pc.has_index(PINECONE_INDEX_NAME):
-    pc.create_index_for_model(
-        name=PINECONE_INDEX_NAME,
-        cloud="aws",
-        region="us-east-1",
-        embed={
-            "model": "multilingual-e5-large",     # Default: Pinecone's built-in embedding
-            "field_map": {"text": "chunk_text"}
-        }
-    )
-
-    # --------- OpenAI Embedding Setup ---------
-    #
-    # pc.create_index(
-    #     name=PINECONE_INDEX_NAME,
-    #     dimension=1536,    # Use 1536 for text-embedding-3-small, or 3072 for large
-    #     metric="cosine",
-    #     cloud="aws",
-    #     region="us-east-1"
-    # )
-    # --------------------------------------------------
+    if EMBEDDING_MODEL:
+        pc.create_index_for_model(
+            name=PINECONE_INDEX_NAME,
+            cloud="aws",
+            region="us-east-1",
+            embed={
+                "model": EMBEDDING_MODEL,
+                "field_map": {"text": "text"}
+            }
+        )
+    else:
+        # No EMBEDDING_MODEL -> create a vanilla index so Pinecone’s built-in (text-embedding-3-small) is used        
+        pc.create_index(
+            name=PINECONE_INDEX_NAME,
+            dimension=1536,    # default dimension for text-embedding-3-small
+            metric="cosine",
+            cloud="aws",
+            region="us-east-1"
+        )
 
 index = pc.Index(PINECONE_INDEX_NAME)
