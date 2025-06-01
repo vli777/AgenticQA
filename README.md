@@ -60,8 +60,8 @@
 ### 1. Clone and set up backend
 
 ```
-git clone https://github.com/yourusername/agenticdocqa.git
-cd agenticdocqa/backend
+git clone https://github.com/vli777/agenticqa.git
+cd agenticqa/backend
 pip install -r requirements.txt
 # Set environment variables: OPENAI_API_KEY, PINECONE_API_KEY, etc.
 uvicorn main:app --reload
