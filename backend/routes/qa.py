@@ -1,5 +1,6 @@
 # backend/qa.py
 
+import re
 from fastapi import APIRouter, HTTPException
 
 from logger import logger  
@@ -8,6 +9,9 @@ from models import AskRequest
 from utils import get_embedding
 from pinecone_client import index
 from langchain_agent import get_agent
+from langchain_core.output_parsers.json import JsonOutputParser
+
+json_parser = JsonOutputParser()
 
 router = APIRouter()
 
@@ -52,24 +56,14 @@ async def ask(req: AskRequest):
 async def ask_agentic(req: AskRequest):
     """
     Agentic retrieval-augmented QA. Mounted at POST /ask/agentic.
-    Returns both the LLM's reasoning trace and the final answer.
+    Returns the final answer parsed from the agent's output.
     """
+    agent = get_agent(namespace=req.namespace)
     try:
-        agent = get_agent(namespace=req.namespace)
-        # `agent.run(...)` returns a single string containing both chain‐of‐thought and final answer
-        output: str = agent.invoke(req.question)
-        parts = output.split("Answer:")
-        if len(parts) > 1:
-            thought_trace = parts[0].strip()
-            final_answer = parts[1].strip()
-        else:
-            # Fallback: treat the entire string as the answer, and leave thoughts empty
-            thought_trace = ""
-            final_answer = output.strip()
-        return {
-            "thoughts": thought_trace,
-            "answer": final_answer
-        }
-        
+        result = agent.invoke(req.question)
+        # Just return everything as a string, no parsing at all
+        return {"output": str(result)}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # Even on error, return what you have
+        return {"output": str(result) if result else None, "error": str(e)}
+        # raise HTTPException(status_code=500, detail=str(e))
