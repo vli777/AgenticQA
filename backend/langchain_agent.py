@@ -23,7 +23,7 @@ def _get_vectorstore(namespace: str = "default") -> LC_Pinecone:
     # 2) Choose embedding based on EMBEDDING_MODEL
     if EMBEDDING_MODEL == "multilingual-e5-large":
         # Use HuggingFace E5 for local embeddings
-        embedder = HuggingFaceEmbeddings(model_name="intfloat/e5-base-v2")
+        embedder = HuggingFaceEmbeddings(model_name="intfloat/e5-large")
     elif EMBEDDING_MODEL == "text-embedding-3-small":
         # Use OpenAI’s text-embedding-3-small via langchain_openai
         embedder = OpenAIEmbeddings(
