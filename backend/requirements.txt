@@ -9,4 +9,5 @@ pypdf
 sentence_transformers
 langchain
 langchain-community
+langchain-nvidia-ai-endpoints
 python-multipart

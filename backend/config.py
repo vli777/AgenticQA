@@ -10,6 +10,7 @@ DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME") or "test"
+NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY")
 
 # Read the full model name from the environment, e.g.:
 #   EMBEDDING_MODEL="multilingual-e5-large"  or  "text-embedding-3-small"
