@@ -9,6 +9,7 @@ from langchain_openai import OpenAI
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_openai import OpenAIEmbeddings
 from langchain_pinecone import Pinecone as LC_Pinecone
+from langchain_nvidia_ai_endpoints import ChatNVIDIA
 
 from config import PINECONE_INDEX_NAME, EMBEDDING_MODEL, OPENAI_API_KEY
 
@@ -85,22 +86,34 @@ def get_agent(namespace: str = "default"):
     We use ChatOpenAI (gpt-3.5-turbo) as the LLM and ZERO_SHOT_REACT_DESCRIPTION.
     """
     # 1) Create the Chat model
-    llm = OpenAI(
-        model_name="gpt-4.0",
-        openai_api_key=os.getenv("OPENAI_API_KEY"),
-        temperature=0.0
-    )
+    llm = ChatNVIDIA(model="meta/llama-4-maverick-17b-128e-instruct", temperature=0.0)
+
+    # llm = OpenAI(
+    #     model_name="gpt-4.0",
+    #     openai_api_key=os.getenv("OPENAI_API_KEY"),
+    #     temperature=0.0
+    # )
 
     # 2) Build the Pinecone search tool
     pinecone_tool = _pinecone_search_tool(namespace)
 
     # 3) Initialize a zero-shot agent with that single tool
+    system_prompt = """
+        You are an agent designed to answer questions step by step.
+        On each turn, do only one of:
+        - Output an Action (with Action Input) if a tool call is needed.
+        - Output a Final Answer if done.
+        Never output both Action and Final Answer in a single response.
+    """
+
     agent = initialize_agent(
         tools=[pinecone_tool],
         llm=llm,
         agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
         verbose=True,      # shows “Thought:”, “Action:”, “Observation:”, etc.
         max_iterations=3,  # limit how many times the agent can loop
-        early_stopping_method="generate"
+        early_stopping_method="generate",
+        handle_parsing_errors=True, 
+        system_message=system_prompt
     )
     return agent
