@@ -2,9 +2,9 @@
 
 import numpy as np
 
-from backend.utils import get_embedding  
-from backend.pinecone_client import index 
-from backend.config import EMBEDDING_MODEL
+from utils import get_embedding  
+from pinecone_client import index 
+from config import EMBEDDING_MODEL
 
 def upsert_doc(doc_text, doc_id, namespace="default"):
     """

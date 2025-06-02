@@ -1,11 +1,13 @@
+# backend/qa.py
+
 from fastapi import APIRouter, HTTPException
 
-from backend.logger import logger  
-from backend.config import EMBEDDING_MODEL
-from backend.models import AskRequest
-from backend.utils import get_embedding
-from backend.pinecone_client import index
-from backend.langchain_agent import get_agent
+from logger import logger  
+from config import EMBEDDING_MODEL
+from models import AskRequest
+from utils import get_embedding
+from pinecone_client import index
+from langchain_agent import get_agent
 
 router = APIRouter()
 
