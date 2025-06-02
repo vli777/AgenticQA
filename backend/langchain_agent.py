@@ -10,8 +10,7 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_openai import OpenAIEmbeddings
 from langchain_pinecone import Pinecone as LC_Pinecone
 
-from pinecone_client import pc 
-from config import PINECONE_INDEX_NAME, EMBEDDING_MODEL
+from config import PINECONE_INDEX_NAME, EMBEDDING_MODEL, OPENAI_API_KEY
 
 def _get_vectorstore(namespace: str = "default") -> LC_Pinecone:
     """
@@ -28,7 +27,7 @@ def _get_vectorstore(namespace: str = "default") -> LC_Pinecone:
         # Use OpenAI’s text-embedding-3-small via langchain_openai
         embedder = OpenAIEmbeddings(
             model="text-embedding-3-small",
-            openai_api_key=os.getenv("OPENAI_API_KEY")
+            openai_api_key=OPENAI_API_KEY
         )
     else:
         # EMBEDDING_MODEL is None or "llama-text-embed-v2"
@@ -40,11 +39,10 @@ def _get_vectorstore(namespace: str = "default") -> LC_Pinecone:
 
     # 3) Wrap the existing Pinecone index (created elsewhere) into a PineconeVectorStore
     vectorstore = LC_Pinecone.from_existing_index(
-        embeddings=embedder,
+        embedding=embedder,
         index_name=PINECONE_INDEX_NAME,
         namespace=namespace,
         text_key="text",
-        client=pc
     )
     return vectorstore
 
@@ -88,7 +86,7 @@ def get_agent(namespace: str = "default"):
     """
     # 1) Create the Chat model
     llm = OpenAI(
-        model_name="gpt-3.5-turbo",
+        model_name="gpt-4.0",
         openai_api_key=os.getenv("OPENAI_API_KEY"),
         temperature=0.0
     )
