@@ -57,7 +57,7 @@ async def ask_agentic(req: AskRequest):
     try:
         agent = get_agent(namespace=req.namespace)
         # `agent.run(...)` returns a single string containing both chain‐of‐thought and final answer
-        output: str = agent.run(req.question)
+        output: str = agent.invoke(req.question)
         parts = output.split("Answer:")
         if len(parts) > 1:
             thought_trace = parts[0].strip()
