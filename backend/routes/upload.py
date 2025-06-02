@@ -1,8 +1,10 @@
+# backend/upload.py
+
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from typing import List
 
-from backend.utils import extract_text_from_pdf_bytes, chunk_document_text
-from backend.services import upsert_doc
+from utils import extract_text_from_pdf_bytes, chunk_document_text
+from services import upsert_doc
 
 router = APIRouter()
 

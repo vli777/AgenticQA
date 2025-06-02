@@ -2,10 +2,10 @@
 
 from fastapi import FastAPI, Body
 
-from backend.config import DEBUG, EMBEDDING_MODEL
-from backend.utils import get_embedding
-from backend.routes.upload import router as upload_router
-from backend.routes.qa import router as qa_router
+from config import DEBUG, EMBEDDING_MODEL
+from utils import get_embedding
+from routes.upload import router as upload_router
+from routes.qa import router as qa_router
 
 app = FastAPI(debug=DEBUG)
 app.include_router(upload_router, prefix="/upload", tags=["upload"])

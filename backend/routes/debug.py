@@ -3,7 +3,7 @@
 import json
 import re
 from fastapi import APIRouter
-from backend.pinecone_client import pc
+from pinecone_client import pc
 
 router = APIRouter()
 
