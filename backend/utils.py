@@ -3,7 +3,7 @@
 from sentence_transformers import SentenceTransformer
 import openai
 import io
-from PyPDF2 import PdfReader
+from pypdf import PdfReader
 
 _e5 = SentenceTransformer('intfloat/e5-base-v2')
 
