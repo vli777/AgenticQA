@@ -29,7 +29,7 @@
 
 ## 🛠️ Tech Stack
 
-- **Backend**: Python, FastAPI, LangChain, OpenAI API, Pinecone vector DB  
+- **Backend**: Python, FastAPI, LangChain, OpenAI API, HuggingFace, NVIDIA API (Llama/Maverick), Pinecone vector DB  
 - **Frontend**: React, Vercel  
 - **Cloud**: Railway/Render (backend), Vercel (frontend)
 
@@ -50,6 +50,7 @@
 - Python 3.10+
 - Node.js 18+ (for frontend)
 - OpenAI API key ([get one here](https://platform.openai.com/signup))
+- NVIDIA API key (for Llama/Maverick models; [get one here](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/langchain/models/))
 - Pinecone API key ([free signup](https://www.pinecone.io/start/))
 - Railway or Render account (backend deploy)
 - Vercel account (frontend deploy)
