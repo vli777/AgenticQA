@@ -2,6 +2,8 @@
 
 from sentence_transformers import SentenceTransformer
 import openai
+import io
+from PyPDF2 import PdfReader
 
 _e5 = SentenceTransformer('intfloat/e5-base-v2')
 
@@ -20,3 +22,47 @@ def get_embedding(text: str, model: str):
         return resp.data[0].embedding
 
     raise ValueError(f"get_embedding(): unsupported model_name={model!r}")
+
+def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> str:
+    """
+    Read all pages from a PDF (given as raw bytes) and return their concatenated text.
+    Relies on PyPDF2 (PdfReader) to extract page-by-page.
+    """
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    text_parts = []
+    for page in reader.pages:
+        page_text = page.extract_text()
+        if page_text:
+            text_parts.append(page_text)
+    return "\n".join(text_parts)
+
+
+def chunk_document_text(full_text: str, max_chars: int = 1000) -> list[str]:
+    """
+    Split a long string into chunks of roughly `max_chars` characters each.
+    This version splits on double-newlines when possible; if a paragraph
+    would exceed max_chars, it starts a new chunk.
+    """
+    paragraphs = full_text.split("\n\n")
+    chunks: list[str] = []
+    current = ""
+
+    for para in paragraphs:
+        para = para.strip()
+        if not para:
+            continue
+
+        # If adding this paragraph would exceed max_chars, flush current chunk
+        if len(current) + len(para) + 2 > max_chars:
+            chunks.append(current.strip())
+            current = para
+        else:
+            if current:
+                current += "\n\n" + para
+            else:
+                current = para
+
+    if current:
+        chunks.append(current.strip())
+
+    return chunks
