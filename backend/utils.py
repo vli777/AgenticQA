@@ -5,22 +5,23 @@ import openai
 import io
 from pypdf import PdfReader
 
-_e5 = SentenceTransformer('intfloat/e5-base-v2')
+from config import EMBEDDING_MODEL, OPENAI_API_KEY
 
-def get_embedding(text: str, model: str):
+_e5 = SentenceTransformer('intfloat/e5-large')
+
+def get_embedding(text: str, model: str = None):
     """
-    Returns a list-of-floats embedding (1536-dim) for `text` using:
-      • local E5 if model == "multilingual-e5-large"
+    Returns a list-of-floats embedding for `text` using:
+      • local E5-Large if model == "multilingual-e5-large"
       • OpenAI text-embedding-3-small if model == "text-embedding-3-small"
     """
+    model = model or EMBEDDING_MODEL
     if model == "multilingual-e5-large":
-        vec = _e5.encode([text])[0]
+        vec = _e5.encode([text])[0]  # Returns numpy array
         return vec.astype("float32").tolist()
-
-    if model == "text-embedding-3-small":
-        resp = openai.embeddings.create(input=[text], model="text-embedding-3-small")
+    elif model == "text-embedding-3-small":
+        resp = openai.embeddings.create(input=[text], model="text-embedding-3-small", api_key=OPENAI_API_KEY)
         return resp.data[0].embedding
-
     raise ValueError(f"get_embedding(): unsupported model_name={model!r}")
 
 def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> str:
