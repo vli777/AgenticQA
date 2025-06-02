@@ -14,7 +14,7 @@ router = APIRouter()
 @router.post("/")
 async def ask(req: AskRequest):    
     """
-    Simple semantic-search endpoint. Mounted at POST /ask/ because main.py uses prefix="/ask".
+    Simple semantic-search endpoint using vanilla RAG. Mounted at POST /ask/ because main.py uses prefix="/ask".
     """
     if EMBEDDING_MODEL in {"multilingual-e5-large", "text-embedding-3-small"}:
         logger.info(f"Using embedding model: {EMBEDDING_MODEL}")
