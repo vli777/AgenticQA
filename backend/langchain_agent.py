@@ -10,6 +10,8 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_openai import OpenAIEmbeddings
 from langchain_pinecone import Pinecone as LC_Pinecone
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
+from langchain.prompts import ChatPromptTemplate
+from langchain_core.prompts import MessagesPlaceholder
 
 from config import PINECONE_INDEX_NAME, EMBEDDING_MODEL, OPENAI_API_KEY
 
@@ -80,12 +82,14 @@ def _pinecone_search_tool(namespace: str = "default") -> Tool:
     )
 
 
-def get_agent(namespace: str = "default"):
+def get_agent(namespace: str = "default", tools: list = None):
     """
     Returns a LangChain Agent that can call our Pinecone “semantic_search” tool.
     We use ChatOpenAI (gpt-3.5-turbo) as the LLM and ZERO_SHOT_REACT_DESCRIPTION.
     """
-    # 1) Create the Chat model
+    if tools is None:
+        tools = [_pinecone_search_tool(namespace=namespace)]
+
     llm = ChatNVIDIA(model="meta/llama-4-maverick-17b-128e-instruct", temperature=0.0)
 
     # llm = OpenAI(
@@ -94,26 +98,38 @@ def get_agent(namespace: str = "default"):
     #     temperature=0.0
     # )
 
-    # 2) Build the Pinecone search tool
-    pinecone_tool = _pinecone_search_tool(namespace)
+    system = """
+    You are a helpful AI assistant.
+    If you can answer directly, do so.
+    If you need to, use one of the tools.
 
-    # 3) Initialize a zero-shot agent with that single tool
-    system_prompt = """
-        You are an agent designed to answer questions step by step.
-        On each turn, do only one of:
-        - Output an Action (with Action Input) if a tool call is needed.
-        - Output a Final Answer if done.
-        Never output both Action and Final Answer in a single response.
+    When you are ready to answer, output:
+    Thought: <your reasoning>
+    Final Answer: <your answer>
+
+    If you need to use a tool, output:
+    Thought: <your reasoning>
+    Action: <tool name>
+    Action Input: <tool input>
+    
+    Never output any other text after the Final Answer.
+    Never output Observation or another Thought after Final Answer.
     """
+    human = "{input}"
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", system),
+        MessagesPlaceholder("chat_history", optional=True),
+        ("human", human),
+    ])
 
     agent = initialize_agent(
-        tools=[pinecone_tool],
+        tools=tools,  
         llm=llm,
         agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
-        verbose=True,      # shows “Thought:”, “Action:”, “Observation:”, etc.
-        max_iterations=3,  # limit how many times the agent can loop
-        early_stopping_method="generate",
-        handle_parsing_errors=True, 
-        system_message=system_prompt
+        verbose=True,
+        max_iterations=1,
+        early_stopping_method="force",
+        handle_parsing_errors=True,
+        prompt=prompt
     )
     return agent
