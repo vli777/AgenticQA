@@ -5,7 +5,7 @@ openai
 pinecone
 python-dotenv
 pydantic
-PyPDF2
+pypdf
 sentence_transformers
 langchain
 langchain-community
