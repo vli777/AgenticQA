@@ -1,21 +1,15 @@
 # backend/main.py
 
 from fastapi import FastAPI, Body
-import logging
 
-from pinecone_client import pc, index
-from config import DEBUG, EMBEDDING_MODEL
-from models import AskRequest
-from utils import get_embedding
-
-logger = logging.getLogger("agenticqa")
-handler = logging.StreamHandler()
-formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
-handler.setFormatter(formatter)
-logger.addHandler(handler)
-logger.setLevel(logging.INFO)
+from backend.config import DEBUG, EMBEDDING_MODEL
+from backend.utils import get_embedding
+from backend.routes.upload import router as upload_router
+from backend.routes.qa import router as qa_router
 
 app = FastAPI(debug=DEBUG)
+app.include_router(upload_router, prefix="/upload", tags=["upload"])
+app.include_router(qa_router, prefix="/ask", tags=["qa"])
 
 if DEBUG:
     from routes.debug import router as debug_router
@@ -32,36 +26,3 @@ if EMBEDDING_MODEL:
 def root():
     return {"message": "AgenticQA running"}
 
-@app.post("/ask")
-async def ask(req: AskRequest):    
-    if EMBEDDING_MODEL in {"multilingual-e5-large", "text-embedding-3-small"}:
-        logger.info(f"Using embedding model: {EMBEDDING_MODEL}")
-        # Local/E5 or OpenAI models: compute vector locally, then do a vector query        
-        q_embed = get_embedding(text=req.question, model=EMBEDDING_MODEL)
-        response = index.query(
-            vector=q_embed,
-            top_k=5,
-            include_metadata=True,
-            namespace=req.namespace
-        )
-        results = response.to_dict()
-
-    else:
-        # Pinecone-managed embeddings (either default or LLaMA)
-        if EMBEDDING_MODEL == "llama-text-embed-v2":
-            logger.info(f"Using embedding model: {EMBEDDING_MODEL}")
-        else:
-            logger.info("Using embedding model: text-embedding-3-small")
-            
-        query_body = {"top_k": 5, "inputs": {"text": req.question}}
-
-        if EMBEDDING_MODEL == "llama-text-embed-v2":            
-            query_body["model"] = "llama-text-embed-v2"
-
-        response = index.search(
-            namespace=req.namespace,
-            query=query_body
-        )
-        results = response.to_dict()
-
-    return {"results": results}
