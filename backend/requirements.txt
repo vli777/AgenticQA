@@ -7,3 +7,5 @@ python-dotenv
 pydantic
 PyPDF2
 sentence_transformers
+langchain
+python-multipart
