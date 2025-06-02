@@ -8,4 +8,5 @@ pydantic
 PyPDF2
 sentence_transformers
 langchain
+langchain-community
 python-multipart
