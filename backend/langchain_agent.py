@@ -58,6 +58,25 @@ def _pinecone_search_tool(namespace: str = "default") -> Tool:
     """
     vectorstore = _get_vectorstore(namespace)
 
+    def clean_text(text: str) -> str:
+        """Clean and format text for better readability."""
+        # Remove extra whitespace
+        text = re.sub(r'\s+', ' ', text)
+        # Fix spacing around numbers
+        text = re.sub(r'(\d+)\s+', r'\1 ', text)
+        # Fix spacing after punctuation
+        text = re.sub(r'([.!?])\s+', r'\1 ', text)
+        # Remove page numbers at the end
+        text = re.sub(r'\s+\d+$', '', text)
+        # Remove leading/trailing whitespace
+        text = text.strip()
+        # Ensure proper sentence structure
+        if text and not text[0].isupper():
+            text = text[0].upper() + text[1:]
+        if text and not text[-1] in '.!?':
+            text += '.'
+        return text
+
     def search_fn(query: str) -> str:
         # Retrieve up to 10 matching chunks with higher threshold
         docs = vectorstore.similarity_search(
@@ -104,12 +123,15 @@ def _pinecone_search_tool(namespace: str = "default") -> Tool:
                             break
                     combined_text = combined_text.strip() + "..."
                 
+                # Clean and format the text
+                combined_text = clean_text(combined_text)
                 lines.append(f"[{source}::{doc_id}] {combined_text}")
         
         if not lines:
             return "No relevant information found."
             
-        return "\n".join(lines[:5])  # Return top 5 most relevant results
+        # Return top 5 most relevant results with extra spacing
+        return "\n\n".join(lines[:5])
 
     return Tool(
         name="semantic_search",
