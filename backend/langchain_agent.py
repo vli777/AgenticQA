@@ -153,15 +153,18 @@ def extract_json_from_text(text: str) -> Dict:
     """Extract JSON from text, handling cases where there might be text before or after the JSON."""
     try:
         # First try to parse the entire text as JSON
+        if isinstance(text, dict):
+            return text
         return json.loads(text)
     except json.JSONDecodeError:
         # If that fails, try to find JSON in the text
-        json_match = re.search(r'\{[\s\S]*\}', text)
-        if json_match:
-            try:
-                return json.loads(json_match.group())
-            except json.JSONDecodeError:
-                pass
+        if isinstance(text, str):
+            json_match = re.search(r'\{[\s\S]*\}', text)
+            if json_match:
+                try:
+                    return json.loads(json_match.group())
+                except json.JSONDecodeError:
+                    pass
     return None
 
 def get_agent(namespace: str = "default", tools: list = None):
@@ -181,7 +184,8 @@ def get_agent(namespace: str = "default", tools: list = None):
     3. Provide your answer with reasoning
     4. Include relevant sources if you used the search tool
 
-    IMPORTANT: You MUST output ONLY a JSON object, with no text before or after it. The JSON must look exactly like this:
+    CRITICAL: You MUST output ONLY a JSON object, with no text before or after it. DO NOT include your thought process or reasoning in the output.
+    The JSON must look exactly like this:
     {{
         "answer": "The final answer to the question",
         "reasoning": [
@@ -197,13 +201,14 @@ def get_agent(namespace: str = "default", tools: list = None):
 
     Rules:
     - Output ONLY the JSON object, nothing else
+    - DO NOT include any text before or after the JSON
+    - DO NOT include your thought process in the output
     - The answer field must be a string with your final answer
     - The reasoning field must be an array of strings, where each string is one step in your reasoning
     - The sources field must be an array of strings, where each string is a source from the search tool
     - Make sure the JSON is properly formatted with double quotes
     - Each step in reasoning should be a separate string in the array
     - If you used the search tool, include the exact source strings in the sources array
-    - DO NOT include any explanatory text before or after the JSON
     """
 
     prompt = ChatPromptTemplate.from_messages([
@@ -218,9 +223,7 @@ def get_agent(namespace: str = "default", tools: list = None):
     chain = (
         prompt 
         | llm 
-        | StrOutputParser()  # Get the raw string output
-        | extract_json_from_text  # Extract JSON from the text
-        | json_parser  # Parse the JSON
+        | json_parser  # Parse directly to JSON
     )
 
     return chain
