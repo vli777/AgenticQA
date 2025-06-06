@@ -1,7 +1,7 @@
 # AgenticQA
 
 *A modern, agent-powered document Q&A system. Upload your docs, ask questions, and get smart, context-rich answers—powered by an LLM agent that searches, reasons, and cites its sources.*
-![image](https://github.com/user-attachments/assets/34b6a7b4-da53-4fa0-a9be-0aca9271f5ea)
+![image](https://github.com/user-attachments/assets/0720bff2-209a-4d3a-b685-e02cd42030dc)
 
 ---
 
