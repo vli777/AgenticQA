@@ -4,9 +4,10 @@ from fastapi import APIRouter, UploadFile, File, HTTPException
 from typing import List
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain.schema import Document
+import re
 
 from utils import extract_text_from_pdf_bytes, chunk_document_text
-from services import upsert_doc
+from services import upsert_doc, chunk_text
 
 router = APIRouter()
 
@@ -33,26 +34,47 @@ def load_and_chunk_documents(
         docs = loader.load_and_split()  
         os.unlink(tmp_path)  # clean up temp file
 
-        # By default, load_and_split() will chunk by page or by whitespace; 
-        # if you want a fixed max_chars, you can re‐chunk here:
-        final_docs: List[Document] = []
-        for doc in docs:
-            text = doc.page_content
-            # manual sub‐chunking to max_chars (if desired)
-            if len(text) > max_chars:
-                # simple split by max_chars chunks (no overlap)
-                for i in range(0, len(text), max_chars):
-                    chunk_text = text[i : i + max_chars]
-                    metadata = doc.metadata.copy() if doc.metadata else {}
-                    # store original page number if present
-                    metadata["source"] = filename
-                    metadata["chunk_id"] = f"{filename}__{i}"
-                    final_docs.append(Document(page_content=chunk_text, metadata=metadata))
-            else:
-                metadata = doc.metadata.copy() if doc.metadata else {}
-                metadata["source"] = filename
-                metadata["chunk_id"] = f"{filename}__0"
-                final_docs.append(Document(page_content=text, metadata=metadata))
+        # Combine all pages into one text
+        full_text = "\n\n".join(doc.page_content for doc in docs)
+        
+        # First split by paragraphs to maintain document structure
+        paragraphs = re.split(r'\n\s*\n', full_text)
+        
+        # Then process each paragraph into chunks
+        chunks = []
+        for para in paragraphs:
+            # Split paragraph into sentences
+            sentences = re.split(r'([.!?])\s+', para)
+            current_chunk = ""
+            
+            # Process sentences in pairs (sentence + punctuation)
+            for i in range(0, len(sentences), 2):
+                if i + 1 < len(sentences):
+                    sentence = sentences[i] + sentences[i + 1]
+                else:
+                    sentence = sentences[i]
+                
+                # If adding this sentence would exceed chunk size, save current chunk
+                if len(current_chunk) + len(sentence) > 800:  # Smaller chunks for better context
+                    if current_chunk:
+                        chunks.append(current_chunk.strip())
+                    current_chunk = sentence
+                else:
+                    current_chunk += " " + sentence
+            
+            # Add the last chunk if it exists
+            if current_chunk:
+                chunks.append(current_chunk.strip())
+        
+        # Convert chunks to Documents with metadata
+        final_docs = []
+        for i, chunk in enumerate(chunks):
+            metadata = {
+                "source": filename,
+                "chunk_id": i,
+                "total_chunks": len(chunks)
+            }
+            final_docs.append(Document(page_content=chunk, metadata=metadata))
         return final_docs
 
     elif lower.endswith(".txt"):
@@ -68,22 +90,47 @@ def load_and_chunk_documents(
         docs = loader.load_and_split()
         os.unlink(tmp_path)
 
-        # Similar re‐chunking by max_chars if needed
-        final_docs: List[Document] = []
-        for doc in docs:
-            text = doc.page_content
-            if len(text) > max_chars:
-                for i in range(0, len(text), max_chars):
-                    chunk_text = text[i : i + max_chars]
-                    metadata = doc.metadata.copy() if doc.metadata else {}
-                    metadata["source"] = filename
-                    metadata["chunk_id"] = f"{filename}__{i}"
-                    final_docs.append(Document(page_content=chunk_text, metadata=metadata))
-            else:
-                metadata = doc.metadata.copy() if doc.metadata else {}
-                metadata["source"] = filename
-                metadata["chunk_id"] = f"{filename}__0"
-                final_docs.append(Document(page_content=text, metadata=metadata))
+        # Combine all text into one
+        full_text = "\n\n".join(doc.page_content for doc in docs)
+        
+        # First split by paragraphs to maintain document structure
+        paragraphs = re.split(r'\n\s*\n', full_text)
+        
+        # Then process each paragraph into chunks
+        chunks = []
+        for para in paragraphs:
+            # Split paragraph into sentences
+            sentences = re.split(r'([.!?])\s+', para)
+            current_chunk = ""
+            
+            # Process sentences in pairs (sentence + punctuation)
+            for i in range(0, len(sentences), 2):
+                if i + 1 < len(sentences):
+                    sentence = sentences[i] + sentences[i + 1]
+                else:
+                    sentence = sentences[i]
+                
+                # If adding this sentence would exceed chunk size, save current chunk
+                if len(current_chunk) + len(sentence) > 800:  # Smaller chunks for better context
+                    if current_chunk:
+                        chunks.append(current_chunk.strip())
+                    current_chunk = sentence
+                else:
+                    current_chunk += " " + sentence
+            
+            # Add the last chunk if it exists
+            if current_chunk:
+                chunks.append(current_chunk.strip())
+        
+        # Convert chunks to Documents with metadata
+        final_docs = []
+        for i, chunk in enumerate(chunks):
+            metadata = {
+                "source": filename,
+                "chunk_id": i,
+                "total_chunks": len(chunks)
+            }
+            final_docs.append(Document(page_content=chunk, metadata=metadata))
         return final_docs
 
     else:
@@ -96,7 +143,7 @@ async def upload_documents(
     namespace: str = "default"
 ):
     """
-    Upload endpoint. By default, uses LangChain’s PyPDFLoader/TextLoader to extract + chunk.
+    Upload endpoint. By default, uses LangChain's PyPDFLoader/TextLoader to extract + chunk.
     If you want to revert to manual chunking, comment out the LangChain code and uncomment below.
     """
     total_chunks = 0
