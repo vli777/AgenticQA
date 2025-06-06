@@ -89,6 +89,9 @@ def _pinecone_search_tool(namespace: str = "default") -> Tool:
         # Filter docs by score threshold
         docs = [doc for doc in docs if doc.metadata.get("score", 0) >= 0.8]
         
+        if not docs:
+            return "No results found above the 0.8 similarity threshold. Try searching with different terms."
+        
         # Group results by document
         doc_results = {}
         for doc in docs:
@@ -132,7 +135,7 @@ def _pinecone_search_tool(namespace: str = "default") -> Tool:
                 lines.append(f"[{source}::{doc_id}] {combined_text}")
         
         if not lines:
-            return "No relevant information found."
+            return "No meaningful text chunks found in the results. Try searching with different terms."
             
         # Return top 3 most relevant results that passed the threshold
         return "\n\n".join(lines[:3])
@@ -241,7 +244,35 @@ def get_agent(namespace: str = "default", tools: list = None):
     # Create a chain that includes post-processing
     chain = (
         agent_executor
-        | (lambda x: f"Based on the search results: {x['output']}\n\nPlease provide a detailed answer with reasoning and sources in JSON format.")  # Format for LLM
+        | (lambda x: {
+            "search_results": x["output"],
+            "question": x["input"]
+        })
+        | (lambda x: f"""You are a helpful AI assistant that answers questions based on the provided context.
+Your task is to answer this question: {x['question']}
+
+Here are the search results:
+{x['search_results']}
+
+IMPORTANT:
+1. If the search results contain relevant information, use it to answer the question
+2. If the search results don't contain enough information, try searching again with different terms
+3. If you still can't find the information after multiple searches, say so explicitly
+4. Include ALL relevant sources in your response
+5. If you find partial information, explain what you found and what's missing
+
+Please provide your answer in this JSON format:
+{{
+    "answer": "Your detailed answer here",
+    "reasoning": [
+        "First, I found...",
+        "Then, I discovered...",
+        "Finally, I concluded..."
+    ],
+    "sources": [
+        "Include exact source strings here"
+    ]
+}}""")
         | llm  # Use LLM to reason about the search results
         | json_parser  # Parse to JSON
     )
