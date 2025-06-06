@@ -13,6 +13,8 @@ from langchain_openai import OpenAIEmbeddings
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_pinecone import Pinecone as LC_Pinecone
 from langchain.tools import Tool
+from langchain.agents import create_openai_functions_agent
+from langchain.agents import AgentExecutor
 
 from config import PINECONE_INDEX_NAME, EMBEDDING_MODEL, OPENAI_API_KEY
 
@@ -78,12 +80,14 @@ def _pinecone_search_tool(namespace: str = "default") -> Tool:
         return text
 
     def search_fn(query: str) -> str:
-        # Retrieve up to 10 matching chunks with higher threshold
+        # Retrieve matching chunks
         docs = vectorstore.similarity_search(
             query,
-            k=10,
-            score_threshold=0.8  # Higher threshold for better quality
+            k=5,  # Get top 5 results
         )
+        
+        # Filter docs by score threshold
+        docs = [doc for doc in docs if doc.metadata.get("score", 0) >= 0.8]
         
         # Group results by document
         doc_results = {}
@@ -130,15 +134,15 @@ def _pinecone_search_tool(namespace: str = "default") -> Tool:
         if not lines:
             return "No relevant information found."
             
-        # Return top 5 most relevant results with extra spacing
-        return "\n\n".join(lines[:5])
+        # Return top 3 most relevant results that passed the threshold
+        return "\n\n".join(lines[:3])
 
     return Tool(
         name="semantic_search",
         func=search_fn,
         description=(
             "Use this tool to perform a semantic search over uploaded documents. "
-            "Input: a query string. Output: up to five matching chunks "
+            "Input: a query string. Output: up to three matching chunks "
             "formatted as '[source::doc_id] snippet...'."
         )
     )
@@ -179,10 +183,11 @@ def get_agent(namespace: str = "default", tools: list = None):
 
     system = """You are a helpful AI assistant that answers questions based on the provided context.
     Follow these steps:
-    1. Think about how to answer the question
-    2. If you need more information, use the search tool
-    3. Provide your answer with reasoning
-    4. Include relevant sources if you used the search tool
+    1. Break down complex questions into simpler search terms
+    2. Use the search tool multiple times with different terms if needed
+    3. If the first search doesn't yield good results, try alternative phrasings
+    4. Only provide your answer after thorough searching
+    5. Include all relevant sources in your response
 
     CRITICAL: You MUST output ONLY a JSON object, with no text before or after it. DO NOT include your thought process or reasoning in the output.
     The JSON must look exactly like this:
@@ -209,21 +214,36 @@ def get_agent(namespace: str = "default", tools: list = None):
     - Make sure the JSON is properly formatted with double quotes
     - Each step in reasoning should be a separate string in the array
     - If you used the search tool, include the exact source strings in the sources array
+    - If you can't find information after multiple searches, say so in your answer
+    - Don't make up information - if you can't find it, say you don't know
     """
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", system),
-        ("human", "{input}")
+        ("human", "{input}"),
+        MessagesPlaceholder(variable_name="agent_scratchpad")
     ])
+
+    # Create the agent
+    agent = create_openai_functions_agent(llm, tools, prompt)
+    
+    # Create the agent executor
+    agent_executor = AgentExecutor(
+        agent=agent,
+        tools=tools,
+        verbose=True,
+        handle_parsing_errors=True
+    )
 
     # Create a chain that ensures JSON output
     json_parser = JsonOutputParser()
     
     # Create a chain that includes post-processing
     chain = (
-        prompt 
-        | llm 
-        | json_parser  # Parse directly to JSON
+        agent_executor
+        | (lambda x: f"Based on the search results: {x['output']}\n\nPlease provide a detailed answer with reasoning and sources in JSON format.")  # Format for LLM
+        | llm  # Use LLM to reason about the search results
+        | json_parser  # Parse to JSON
     )
 
     return chain

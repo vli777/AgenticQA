@@ -73,7 +73,7 @@ async def ask(req: AskRequest):
         q_embed = get_embedding(text=req.question, model=EMBEDDING_MODEL)
         response = index.query(
             vector=q_embed,
-            top_k=5,
+            top_k=20,  # Get more results to ensure we have enough above threshold
             include_metadata=True,
             namespace=req.namespace
         )
@@ -85,7 +85,7 @@ async def ask(req: AskRequest):
         else:
             logger.info("Using embedding model: text-embedding-3-small")
             
-        query_body = {"top_k": 5, "inputs": {"text": req.question}}
+        query_body = {"top_k": 20, "inputs": {"text": req.question}}  # Get more results to ensure we have enough above threshold
 
         if EMBEDDING_MODEL == "llama-text-embed-v2":            
             query_body["model"] = "llama-text-embed-v2"
@@ -96,6 +96,12 @@ async def ask(req: AskRequest):
         )
         
     results = response.to_dict()
+    
+    # Filter results by score threshold
+    if "matches" in results:
+        results["matches"] = [match for match in results["matches"] if match.get("score", 0) >= 0.8]
+        # Take top 5 after filtering
+        results["matches"] = results["matches"][:5]
     
     # Clean up the text in each match
     if "matches" in results:
