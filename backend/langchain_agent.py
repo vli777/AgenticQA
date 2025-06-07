@@ -53,7 +53,7 @@ def _get_vectorstore(namespace: str = "default") -> LC_Pinecone:
     return vectorstore
 
 
-def _pinecone_search_tool(namespace: str = "default") -> Tool:
+def _pinecone_search_tool(namespace: str = "default", similarity_threshold: float = 0.6) -> Tool:
     """
     Returns a LangChain Tool that performs Pinecone similarity_search under the hood,
     then formats the top-5 hits as "[source::chunk_id] snippet…", following the Pinecone docs.
@@ -83,14 +83,14 @@ def _pinecone_search_tool(namespace: str = "default") -> Tool:
         # Retrieve matching chunks
         docs = vectorstore.similarity_search(
             query,
-            k=5,  # Get top 5 results
+            k=20,  # Match regular RAG endpoint's top_k
         )
         
         # Filter docs by score threshold
-        docs = [doc for doc in docs if doc.metadata.get("score", 0) >= 0.8]
+        docs = [doc for doc in docs if doc.metadata.get("score", 0) >= similarity_threshold]
         
         if not docs:
-            return "No results found above the 0.8 similarity threshold. Try searching with different terms."
+            return f"No results found above the {similarity_threshold} similarity threshold. Try searching with different terms."
         
         # Group results by document
         doc_results = {}
@@ -110,35 +110,36 @@ def _pinecone_search_tool(namespace: str = "default") -> Tool:
             # Get the source from the first chunk
             source = chunks[0].metadata.get("source", "unknown")
             
-            # Combine consecutive chunks if they're from the same document
-            combined_text = " ".join(chunk.page_content for chunk in chunks)
-            
-            # Only include if the combined text is meaningful
-            if len(combined_text.strip()) > 100 and re.search(r'[.!?]', combined_text):
-                if len(combined_text) > 1000:
-                    # Try to find a good breaking point
-                    sentences = re.split(r'([.!?])\s+', combined_text)
-                    combined_text = ""
-                    for i in range(0, len(sentences), 2):
-                        if i + 1 < len(sentences):
-                            sentence = sentences[i] + sentences[i + 1]
-                        else:
-                            sentence = sentences[i]
-                        if len(combined_text) + len(sentence) <= 1000:
-                            combined_text += sentence + " "
-                        else:
-                            break
-                    combined_text = combined_text.strip() + "..."
+            # Process each chunk individually to avoid combining unrelated information
+            for chunk in chunks:
+                text = chunk.page_content
                 
-                # Clean and format the text
-                combined_text = clean_text(combined_text)
-                lines.append(f"[{source}::{doc_id}] {combined_text}")
+                # Only include if the text is meaningful
+                if len(text.strip()) > 50 and re.search(r'[.!?]', text):
+                    if len(text) > 1000:
+                        # Try to find a good breaking point
+                        sentences = re.split(r'([.!?])\s+', text)
+                        text = ""
+                        for i in range(0, len(sentences), 2):
+                            if i + 1 < len(sentences):
+                                sentence = sentences[i] + sentences[i + 1]
+                            else:
+                                sentence = sentences[i]
+                            if len(text) + len(sentence) <= 1000:
+                                text += sentence + " "
+                            else:
+                                break
+                        text = text.strip() + "..."
+                    
+                    # Clean and format the text
+                    text = clean_text(text)
+                    lines.append(f"[{source}::{doc_id}] {text}")
         
         if not lines:
             return "No meaningful text chunks found in the results. Try searching with different terms."
             
-        # Return top 3 most relevant results that passed the threshold
-        return "\n\n".join(lines[:3])
+        # Return more results that passed the threshold
+        return "\n\n".join(lines[:5])  # Return top 5 results
 
     return Tool(
         name="semantic_search",
@@ -180,7 +181,8 @@ def get_agent(namespace: str = "default", tools: list = None):
     Uses NVIDIA's Llama model with structured output.
     """
     if tools is None:
-        tools = [_pinecone_search_tool(namespace=namespace)]
+        # Use a lower similarity threshold (0.6) for the agentic endpoint to get more context
+        tools = [_pinecone_search_tool(namespace=namespace, similarity_threshold=0.6)]
 
     llm = ChatNVIDIA(model="meta/llama-4-maverick-17b-128e-instruct", temperature=0.0)
 
