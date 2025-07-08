@@ -72,6 +72,7 @@ pip install -r requirements.txt
 uvicorn main:app --reload
 ```
 
+```
 # === Required for LLMs (at least one needed) ===
 OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxx     # OpenAI GPT-3.5/4 key
 NVIDIA_API_KEY=nvapi-xxxxxxxxxxxxxxxxxxxx  # NVIDIA Llama/Maverick API key
@@ -83,7 +84,7 @@ PINECONE_INDEX_NAME=agenticqa
 # === Required: Embedding Model Selection ===
 # Options: text-embedding-3-small (OpenAI), multilingual-e5-large (HuggingFace), llama-text-embed-v2 (NVIDIA)
 EMBEDDING_MODEL=text-embedding-3-small
-
+```
 ### 2. Set up frontend
 ```
 cd ../frontend
@@ -93,5 +94,5 @@ npm run dev
 ```
 
 ### 3. Deploy
-Backend: Deploy to Railway or Render
-Frontend: Deploy to Vercel
+- Backend: Deploy to Railway or Render
+- Frontend: Deploy to Vercel
