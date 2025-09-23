@@ -12,6 +12,12 @@ PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME") or "test"
 NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY")
 
+_cors_origins_raw = os.getenv("CORS_ORIGINS")
+if _cors_origins_raw:
+    CORS_ORIGINS = [origin.strip() for origin in _cors_origins_raw.split(",") if origin.strip()]
+else:
+    CORS_ORIGINS = ["*"]
+
 # Read the full model name from the environment, e.g.:
 #   EMBEDDING_MODEL="multilingual-e5-large"  or  "text-embedding-3-small"
 _raw = os.getenv("EMBEDDING_MODEL", "").strip()
