@@ -3,7 +3,7 @@
 import json
 import re
 from fastapi import APIRouter
-from pinecone_client import pc
+from pinecone_client import pc, index
 
 router = APIRouter()
 
@@ -30,3 +30,10 @@ def list_indexes():
         except Exception as e:
             cleaned.append({"raw": s, "error": str(e)})
     return {"indexes": cleaned}
+
+
+@router.delete("/namespace/{namespace}")
+def clear_namespace(namespace: str):
+    """Delete all vectors within a Pinecone namespace."""
+    index.delete(delete_all=True, namespace=namespace)
+    return {"namespace": namespace, "status": "cleared"}
