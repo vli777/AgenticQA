@@ -16,6 +16,11 @@ from langchain_core.output_parsers.json import JsonOutputParser
 
 json_parser = JsonOutputParser()
 
+# Tune retrieval sensitivity
+PRIMARY_SIMILARITY_THRESHOLD = 0.6
+FALLBACK_SIMILARITY_THRESHOLD = 0.4
+MAX_MATCHES_TO_RETURN = 3
+
 # Initialize LLM - using NVIDIA by default
 llm = ChatNVIDIA(model="meta/llama-4-maverick-17b-128e-instruct", temperature=0.0)
 
@@ -94,25 +99,48 @@ async def ask(req: AskRequest):
             namespace=req.namespace,
             query=query_body
         )
-        
+    
     results = response.to_dict()
-    
-    # Filter results by score threshold
-    if "matches" in results:
-        results["matches"] = [match for match in results["matches"] if match.get("score", 0) >= 0.8]
-        # Take top 5 after filtering
-        results["matches"] = results["matches"][:5]
-    
-    # Clean up the text in each match
-    if "matches" in results:
+
+    matches = results.get("matches") or []
+    if matches:
+        # Attach score into metadata to help downstream consumers
+        for match in matches:
+            metadata = match.setdefault("metadata", {})
+            if "score" not in metadata:
+                metadata["score"] = match.get("score")
+
+        def _filter(by_threshold: float):
+            return [m for m in matches if (m.get("score") or 0) >= by_threshold]
+
+        filtered_matches = _filter(PRIMARY_SIMILARITY_THRESHOLD)
+        if not filtered_matches:
+            filtered_matches = _filter(FALLBACK_SIMILARITY_THRESHOLD)
+            if filtered_matches:
+                logger.info(
+                    "Falling back to relaxed similarity threshold %.2f for question '%s'",
+                    FALLBACK_SIMILARITY_THRESHOLD,
+                    req.question,
+                )
+
+        if not filtered_matches:
+            filtered_matches = matches[:MAX_MATCHES_TO_RETURN]
+            if filtered_matches:
+                logger.info(
+                    "Returning lowest-ranked matches because similarity thresholds yielded none (question='%s')",
+                    req.question,
+                )
+
+        # Sort by score (highest first) and trim to requested limit
+        filtered_matches.sort(key=lambda m: m.get("score", 0), reverse=True)
+        results["matches"] = filtered_matches[:MAX_MATCHES_TO_RETURN]
+
         for match in results["matches"]:
             if "metadata" in match and "text" in match["metadata"]:
-                # First do basic cleaning
                 text = clean_text(match["metadata"]["text"])
-                # Then improve grammar with LLM
                 text = await improve_grammar(text)
                 match["metadata"]["text"] = text
-    
+
     return {"results": results}
 
 
