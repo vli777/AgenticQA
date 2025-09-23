@@ -8,6 +8,7 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from utils import get_embedding  
 from pinecone_client import index 
 from config import EMBEDDING_MODEL
+from logger import logger
 
 def clean_text(text: str) -> str:
     """Clean and normalize text."""
@@ -140,6 +141,39 @@ def upsert_doc(doc_text: str, doc_id: str, source: str = "unknown", namespace: s
     
     # Upsert in batches of 100
     batch_size = 100
+    upserted_total = 0
     for i in range(0, len(vectors), batch_size):
         batch = vectors[i:i + batch_size]
-        index.upsert(batch, namespace=namespace)
+        try:
+            response = index.upsert(batch, namespace=namespace)
+        except Exception as exc:
+            logger.error(
+                "Pinecone upsert failed (namespace=%s, batch_index=%s, batch_size=%s, doc_id=%s)",
+                namespace,
+                i // batch_size,
+                len(batch),
+                doc_id,
+                exc_info=exc,
+            )
+            raise
+
+        upserted_count = None
+        if hasattr(response, "upserted_count"):
+            upserted_count = getattr(response, "upserted_count")
+        elif isinstance(response, dict):
+            upserted_count = response.get("upserted_count") or response.get("upserted")
+
+        if isinstance(upserted_count, int):
+            upserted_total += upserted_count
+        else:
+            upserted_total += len(batch)
+
+        logger.info(
+            "Pinecone upsert succeeded (namespace=%s, batch_index=%s, batch_size=%s, upserted=%s)",
+            namespace,
+            i // batch_size,
+            len(batch),
+            upserted_count if upserted_count is not None else len(batch),
+        )
+
+    return {"chunks": len(vectors), "upserted": upserted_total}
