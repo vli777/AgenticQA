@@ -86,21 +86,36 @@ def _pinecone_search_tool(namespace: str = "default", similarity_threshold: floa
             k=20,  # Match regular RAG endpoint's top_k
         )
 
-        # LangChain returns (Document, score) tuples; translate scores to cosine similarity
-        qualified = []
+        # LangChain returns (Document, score) tuples; normalise the numeric score to a similarity.
+        qualified: List[tuple] = []
+        ranked: List[tuple] = []
         for doc, raw_score in hits:
-            meta_score = doc.metadata.get("score")
-            if meta_score is not None:
-                score = meta_score
-            else:
-                # For Pinecone cosine searches the raw score is the distance (0 identical → 2 opposite).
-                if 0.0 <= raw_score <= 2.0:
-                    score = 1.0 - raw_score
-                else:
-                    score = raw_score
+            score = doc.metadata.get("score", raw_score)
 
-            if score >= similarity_threshold:
-                qualified.append((doc, score))
+            try:
+                score = float(score)
+            except (TypeError, ValueError):
+                continue
+
+            if -1.0 <= score <= 1.0:
+                similarity = score
+            elif 0.0 <= score <= 2.0:
+                similarity = 1.0 - score
+            else:
+                similarity = score
+
+            similarity = max(min(similarity, 1.0), -1.0)
+
+            ranked.append((doc, similarity))
+
+            if similarity >= similarity_threshold:
+                qualified.append((doc, similarity))
+
+        low_confidence = False
+        if not qualified and ranked:
+            low_confidence = True
+            ranked.sort(key=lambda x: x[1], reverse=True)
+            qualified = ranked[:5]
 
         if not qualified:
             return f"No results found above the {similarity_threshold} similarity threshold. Try searching with different terms."
@@ -121,7 +136,8 @@ def _pinecone_search_tool(namespace: str = "default", similarity_threshold: floa
             chunks.sort(key=lambda x: x[0].metadata.get("chunk_id", 0))
 
             # Get the source from the first chunk
-            source = chunks[0][0].metadata.get("source", "unknown")
+            meta0 = chunks[0][0].metadata or {}
+            source = meta0.get("source") or meta0.get("file_name") or "unknown"
 
             # Process each chunk individually to avoid combining unrelated information
             for chunk, score in chunks:
@@ -145,9 +161,18 @@ def _pinecone_search_tool(namespace: str = "default", similarity_threshold: floa
                         text = text.strip() + "..."
                     # Clean and format the text, include score for transparency
                     text = clean_text(text)
+                    section = chunk.metadata.get("section_index")
+                    if section is not None:
+                        provenance = f"{source}::section-{section}"
+                    else:
+                        provenance = f"{source}::{doc_id}"
+
                     lines.append(
-                        f"[{source}::{doc_id}] (similarity: {score:.2f}) {text}"
+                        f"[{provenance}] (similarity: {score:.2f}) {text}"
                     )
+
+        if low_confidence and lines:
+            lines.insert(0, "Results below similarity threshold; showing best available matches.")
 
         if not lines:
             return "No meaningful text chunks found in the results. Try searching with different terms."
@@ -195,8 +220,8 @@ def get_agent(namespace: str = "default", tools: list = None):
     Uses NVIDIA's Llama model with structured output.
     """
     if tools is None:
-        # Use a lower similarity threshold (0.6) for the agentic endpoint to get more context
-        tools = [_pinecone_search_tool(namespace=namespace, similarity_threshold=0.6)]
+        # Use a fairly permissive similarity threshold so the agent can reason over weaker matches
+        tools = [_pinecone_search_tool(namespace=namespace, similarity_threshold=0.3)]
 
     llm = ChatNVIDIA(model="meta/llama-4-maverick-17b-128e-instruct", temperature=0.0)
 

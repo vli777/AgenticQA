@@ -2,7 +2,7 @@
 
 import numpy as np
 import re
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 from utils import get_embedding  
@@ -94,7 +94,13 @@ def chunk_text(text: str, chunk_size: int = 2000, chunk_overlap: int = 400) -> L
     
     return meaningful_chunks
 
-def upsert_doc(doc_text: str, doc_id: str, source: str = "unknown", namespace: str = "default"):
+def upsert_doc(
+    doc_text: str,
+    doc_id: str,
+    source: str = "unknown",
+    namespace: str = "default",
+    metadata_extra: Optional[Dict[str, Any]] = None,
+):
     """
     Upsert a document to Pinecone with proper chunking and metadata.
     
@@ -132,6 +138,9 @@ def upsert_doc(doc_text: str, doc_id: str, source: str = "unknown", namespace: s
             "chunk_id": i,
             "total_chunks": len(chunks)
         }
+
+        if metadata_extra:
+            metadata.update(metadata_extra)
         
         vectors.append({
             "id": chunk_id,

@@ -181,20 +181,33 @@ async def upload_documents(
             )
             continue
 
+        safe_doc_id = re.sub(r'[^a-zA-Z0-9]+', '_', name).strip('_').lower() or "document"
+
         file_chunks_indexed = 0
         file_vectors_upserted = 0
 
-        for doc in docs:
+        for idx, doc in enumerate(docs):
             # Each doc is a langchain.schema.Document with page_content + metadata
             chunk_id = doc.metadata.get("chunk_id", f"{name}__0")
-            result = upsert_doc(doc.page_content, doc_id=chunk_id, namespace=namespace)
+            section_index = chunk_id if isinstance(chunk_id, int) else idx
+            result = upsert_doc(
+                doc.page_content,
+                doc_id=safe_doc_id,
+                source=name,
+                namespace=namespace,
+                metadata_extra={
+                    "file_name": name,
+                    "file_id": safe_doc_id,
+                    "section_index": section_index,
+                },
+            )
 
             file_chunks_indexed += result.get("chunks", 0)
             file_vectors_upserted += result.get("upserted", 0)
 
             logger.info(
                 "Indexed chunk %s from file '%s' (namespace=%s)",
-                chunk_id,
+                section_index,
                 name,
                 namespace,
             )
