@@ -7,7 +7,7 @@ from typing import List, Any, Dict, TypedDict, Optional
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.runnables import RunnablePassthrough
+from langchain_core.runnables import RunnablePassthrough, RunnableLambda
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
 from langchain_openai import OpenAIEmbeddings
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -276,46 +276,22 @@ def get_agent(namespace: str = "default", tools: list = None):
         agent=agent,
         tools=tools,
         verbose=True,
-        handle_parsing_errors=True
+        handle_parsing_errors=True,
+        return_intermediate_steps=True,
     )
 
-    # Create a chain that ensures JSON output
-    json_parser = JsonOutputParser()
-    
-    # Create a chain that includes post-processing
-    chain = (
-        agent_executor
-        | (lambda x: {
-            "search_results": x["output"],
-            "question": x["input"]
-        })
-        | (lambda x: f"""You are a helpful AI assistant that answers questions based on the provided context.
-Your task is to answer this question: {x['question']}
+    def _invoke(inputs: Dict[str, Any]) -> Dict[str, Any]:
+        result = agent_executor.invoke(inputs)
+        output = result.get("output", result)
 
-Here are the search results:
-{x['search_results']}
+        parsed = extract_json_from_text(output)
+        if parsed is None:
+            parsed = {
+                "answer": str(output),
+                "reasoning": result.get("intermediate_steps", []),
+                "sources": [],
+            }
 
-IMPORTANT:
-1. If the search results contain relevant information, use it to answer the question
-2. If the search results don't contain enough information, try searching again with different terms
-3. If you still can't find the information after multiple searches, say so explicitly
-4. Include ALL relevant sources in your response
-5. If you find partial information, explain what you found and what's missing
+        return parsed
 
-Please provide your answer in this JSON format:
-{{
-    "answer": "Your detailed answer here",
-    "reasoning": [
-        "First, I found...",
-        "Then, I discovered...",
-        "Finally, I concluded..."
-    ],
-    "sources": [
-        "Include exact source strings here"
-    ]
-}}""")
-        | llm  # Use LLM to reason about the search results
-        | json_parser  # Parse to JSON
-    )
-
-    return chain
+    return RunnableLambda(_invoke)
