@@ -136,11 +136,15 @@
 }
 
 .chat-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
   display: flex;
   justify-content: space-between;
   padding: 28px 32px 16px;
   border-bottom: 1px solid #e2e8f0;
   gap: 16px;
+  background: #f8fafc;
 }
 
 .mode-switcher {

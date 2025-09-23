@@ -276,14 +276,14 @@ function App() {
               className={chatMode === 'rag' ? 'active' : ''}
               onClick={() => setChatMode('rag')}
             >
-              Standard RAG
+              RAG
             </button>
             <button
               type="button"
               className={chatMode === 'agentic' ? 'active' : ''}
               onClick={() => setChatMode('agentic')}
             >
-              Agentic QA
+              Agentic
             </button>
           </div>
         </div>
