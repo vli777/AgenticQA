@@ -80,40 +80,53 @@ def _pinecone_search_tool(namespace: str = "default", similarity_threshold: floa
         return text
 
     def search_fn(query: str) -> str:
-        # Retrieve matching chunks
-        docs = vectorstore.similarity_search(
+        # Retrieve matching chunks with scores so we can respect the similarity threshold
+        hits = vectorstore.similarity_search_with_score(
             query,
             k=20,  # Match regular RAG endpoint's top_k
         )
-        
-        # Filter docs by score threshold
-        docs = [doc for doc in docs if doc.metadata.get("score", 0) >= similarity_threshold]
-        
-        if not docs:
+
+        # LangChain returns (Document, score) tuples; translate scores to cosine similarity
+        qualified = []
+        for doc, raw_score in hits:
+            meta_score = doc.metadata.get("score")
+            if meta_score is not None:
+                score = meta_score
+            else:
+                # For Pinecone cosine searches the raw score is the distance (0 identical → 2 opposite).
+                if 0.0 <= raw_score <= 2.0:
+                    score = 1.0 - raw_score
+                else:
+                    score = raw_score
+
+            if score >= similarity_threshold:
+                qualified.append((doc, score))
+
+        if not qualified:
             return f"No results found above the {similarity_threshold} similarity threshold. Try searching with different terms."
-        
+
         # Group results by document
         doc_results = {}
-        for doc in docs:
+        for doc, score in qualified:
             meta = doc.metadata or {}
             doc_id = meta.get("doc_id", "unknown")
             if doc_id not in doc_results:
                 doc_results[doc_id] = []
-            doc_results[doc_id].append(doc)
-        
+            doc_results[doc_id].append((doc, score))
+
         # Format results
         lines: List[str] = []
         for doc_id, chunks in doc_results.items():
             # Sort chunks by their position in the document
-            chunks.sort(key=lambda x: x.metadata.get("chunk_id", 0))
-            
+            chunks.sort(key=lambda x: x[0].metadata.get("chunk_id", 0))
+
             # Get the source from the first chunk
-            source = chunks[0].metadata.get("source", "unknown")
-            
+            source = chunks[0][0].metadata.get("source", "unknown")
+
             # Process each chunk individually to avoid combining unrelated information
-            for chunk in chunks:
+            for chunk, score in chunks:
                 text = chunk.page_content
-                
+
                 # Only include if the text is meaningful
                 if len(text.strip()) > 50 and re.search(r'[.!?]', text):
                     if len(text) > 1000:
@@ -130,14 +143,15 @@ def _pinecone_search_tool(namespace: str = "default", similarity_threshold: floa
                             else:
                                 break
                         text = text.strip() + "..."
-                    
-                    # Clean and format the text
+                    # Clean and format the text, include score for transparency
                     text = clean_text(text)
-                    lines.append(f"[{source}::{doc_id}] {text}")
-        
+                    lines.append(
+                        f"[{source}::{doc_id}] (similarity: {score:.2f}) {text}"
+                    )
+
         if not lines:
             return "No meaningful text chunks found in the results. Try searching with different terms."
-            
+
         # Return more results that passed the threshold
         return "\n\n".join(lines[:5])  # Return top 5 results
 

@@ -8,6 +8,7 @@ import re
 
 from utils import extract_text_from_pdf_bytes, chunk_document_text
 from services import upsert_doc, chunk_text
+from logger import logger
 
 router = APIRouter()
 
@@ -147,21 +148,56 @@ async def upload_documents(
     If you want to revert to manual chunking, comment out the LangChain code and uncomment below.
     """
     total_chunks = 0
+    total_upserted = 0
+
+    logger.info(
+        "Upload request received (files=%s, namespace=%s)",
+        [uploaded.filename for uploaded in files],
+        namespace,
+    )
 
     for uploaded in files:
         name = uploaded.filename
         data = await uploaded.read()
 
+        logger.info(
+            "Processing file '%s' (bytes=%s, namespace=%s)",
+            name,
+            len(data),
+            namespace,
+        )
+
         try:
             docs = load_and_chunk_documents(data, name, max_chars=1000)
         except Exception as e:
+            logger.exception("Failed to load file '%s' for indexing", name)
             raise HTTPException(status_code=400, detail=f"Loader error: {e}")
+
+        if not docs:
+            logger.warning(
+                "Loader produced no chunks for file '%s' (namespace=%s)",
+                name,
+                namespace,
+            )
+            continue
+
+        file_chunks_indexed = 0
+        file_vectors_upserted = 0
 
         for doc in docs:
             # Each doc is a langchain.schema.Document with page_content + metadata
             chunk_id = doc.metadata.get("chunk_id", f"{name}__0")
-            upsert_doc(doc.page_content, doc_id=chunk_id, namespace=namespace)
-            total_chunks += 1
+            result = upsert_doc(doc.page_content, doc_id=chunk_id, namespace=namespace)
+
+            file_chunks_indexed += result.get("chunks", 0)
+            file_vectors_upserted += result.get("upserted", 0)
+
+            logger.info(
+                "Indexed chunk %s from file '%s' (namespace=%s)",
+                chunk_id,
+                name,
+                namespace,
+            )
 
         # if name.lower().endswith(".pdf"):
         #     try:
@@ -178,5 +214,23 @@ async def upload_documents(
         #     chunk_id = f"{name}__chunk{idx}"
         #     upsert_doc(chunk, doc_id=chunk_id, namespace=namespace)
         #     total_chunks += 1
+
+        total_chunks += file_chunks_indexed
+        total_upserted += file_vectors_upserted
+
+        logger.info(
+            "Finished indexing file '%s' (namespace=%s, chunks_indexed=%s, pinecone_vectors=%s)",
+            name,
+            namespace,
+            file_chunks_indexed,
+            file_vectors_upserted,
+        )
+
+    logger.info(
+        "Upload request complete (namespace=%s, total_chunks=%s, total_vectors=%s)",
+        namespace,
+        total_chunks,
+        total_upserted,
+    )
 
     return {"indexed_chunks": total_chunks}
