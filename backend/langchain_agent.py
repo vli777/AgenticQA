@@ -1,297 +1,252 @@
 # backend/langchain_agent.py
 
-import os
-import json
 import re
+import json
 from typing import List, Any, Dict, TypedDict, Optional
-from langchain_core.messages import HumanMessage, AIMessage
-from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.runnables import RunnablePassthrough, RunnableLambda
-from langchain_nvidia_ai_endpoints import ChatNVIDIA
-from langchain_openai import OpenAIEmbeddings
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_pinecone import Pinecone as LC_Pinecone
+
 from langchain.tools import Tool
-from langchain.agents import create_openai_functions_agent
-from langchain.agents import AgentExecutor
+from langchain_nvidia_ai_endpoints import ChatNVIDIA
+from langchain.agents import initialize_agent, AgentType
+from langchain_core.runnables import RunnableLambda
 
-from config import PINECONE_INDEX_NAME, EMBEDDING_MODEL, OPENAI_API_KEY
+from config import EMBEDDING_MODEL
+from utils import get_embedding
+from pinecone_client import index
+from services import clean_text  # reuse the shared cleaner
 
-def _get_vectorstore(namespace: str = "default") -> LC_Pinecone:
-    """
-    Returns a LangChain-Pinecone wrapper for an existing index, exactly as shown in:
-    https://python.langchain.com/docs/integrations/vectorstores/pinecone/
-    We pick an Embeddings object based on EMBEDDING_MODEL; if unset or 'llama-text-embed-v2',
-    we default to OpenAIEmbeddings (because Pinecone will embed server-side if that index was created with LLaMA).
-    """
-    # 2) Choose embedding based on EMBEDDING_MODEL
-    if EMBEDDING_MODEL == "multilingual-e5-large":
-        # Use HuggingFace E5 for local embeddings
-        embedder = HuggingFaceEmbeddings(model_name="intfloat/e5-large")
-    elif EMBEDDING_MODEL == "text-embedding-3-small":
-        # Use OpenAI's text-embedding-3-small via langchain_openai
-        embedder = OpenAIEmbeddings(
-            model="text-embedding-3-small",
-            openai_api_key=OPENAI_API_KEY
-        )
-    else:
-        # EMBEDDING_MODEL is None or "llama-text-embed-v2"
-        # We still need to pass an Embeddings object, so fall back to OpenAIEmbeddings.
-        embedder = OpenAIEmbeddings(
-            model="text-embedding-3-small",
-            openai_api_key=os.getenv("OPENAI_API_KEY")
-        )
-
-    # 3) Wrap the existing Pinecone index (created elsewhere) into a PineconeVectorStore
-    vectorstore = LC_Pinecone.from_existing_index(
-        embedding=embedder,
-        index_name=PINECONE_INDEX_NAME,
-        namespace=namespace,
-        text_key="text",
-    )
-    return vectorstore
-
-
-def _pinecone_search_tool(namespace: str = "default", similarity_threshold: float = 0.6) -> Tool:
-    """
-    Returns a LangChain Tool that performs Pinecone similarity_search under the hood,
-    then formats the top-5 hits as "[source::chunk_id] snippet…", following the Pinecone docs.
-    """
-    vectorstore = _get_vectorstore(namespace)
-
-    def clean_text(text: str) -> str:
-        """Clean and format text for better readability."""
-        # Remove extra whitespace
-        text = re.sub(r'\s+', ' ', text)
-        # Fix spacing around numbers
-        text = re.sub(r'(\d+)\s+', r'\1 ', text)
-        # Fix spacing after punctuation
-        text = re.sub(r'([.!?])\s+', r'\1 ', text)
-        # Remove page numbers at the end
-        text = re.sub(r'\s+\d+$', '', text)
-        # Remove leading/trailing whitespace
-        text = text.strip()
-        # Ensure proper sentence structure
-        if text and not text[0].isupper():
-            text = text[0].upper() + text[1:]
-        if text and not text[-1] in '.!?':
-            text += '.'
-        return text
-
-    def search_fn(query: str) -> str:
-        # Retrieve matching chunks with scores so we can respect the similarity threshold
-        hits = vectorstore.similarity_search_with_score(
-            query,
-            k=20,  # Match regular RAG endpoint's top_k
-        )
-
-        # LangChain returns (Document, score) tuples; normalise the numeric score to a similarity.
-        qualified: List[tuple] = []
-        ranked: List[tuple] = []
-        for doc, raw_score in hits:
-            score = doc.metadata.get("score", raw_score)
-
-            try:
-                score = float(score)
-            except (TypeError, ValueError):
-                continue
-
-            if -1.0 <= score <= 1.0:
-                similarity = score
-            elif 0.0 <= score <= 2.0:
-                similarity = 1.0 - score
-            else:
-                similarity = score
-
-            similarity = max(min(similarity, 1.0), -1.0)
-
-            ranked.append((doc, similarity))
-
-            if similarity >= similarity_threshold:
-                qualified.append((doc, similarity))
-
-        low_confidence = False
-        if not qualified and ranked:
-            low_confidence = True
-            ranked.sort(key=lambda x: x[1], reverse=True)
-            qualified = ranked[:5]
-
-        if not qualified:
-            return f"No results found above the {similarity_threshold} similarity threshold. Try searching with different terms."
-
-        # Group results by document
-        doc_results = {}
-        for doc, score in qualified:
-            meta = doc.metadata or {}
-            doc_id = meta.get("doc_id", "unknown")
-            if doc_id not in doc_results:
-                doc_results[doc_id] = []
-            doc_results[doc_id].append((doc, score))
-
-        # Format results
-        lines: List[str] = []
-        for doc_id, chunks in doc_results.items():
-            # Sort chunks by their position in the document
-            chunks.sort(key=lambda x: x[0].metadata.get("chunk_id", 0))
-
-            # Get the source from the first chunk
-            meta0 = chunks[0][0].metadata or {}
-            source = meta0.get("source") or meta0.get("file_name") or "unknown"
-
-            # Process each chunk individually to avoid combining unrelated information
-            for chunk, score in chunks:
-                text = chunk.page_content
-
-                # Only include if the text is meaningful
-                if len(text.strip()) > 50 and re.search(r'[.!?]', text):
-                    if len(text) > 1000:
-                        # Try to find a good breaking point
-                        sentences = re.split(r'([.!?])\s+', text)
-                        text = ""
-                        for i in range(0, len(sentences), 2):
-                            if i + 1 < len(sentences):
-                                sentence = sentences[i] + sentences[i + 1]
-                            else:
-                                sentence = sentences[i]
-                            if len(text) + len(sentence) <= 1000:
-                                text += sentence + " "
-                            else:
-                                break
-                        text = text.strip() + "..."
-                    # Clean and format the text, include score for transparency
-                    text = clean_text(text)
-                    section = chunk.metadata.get("section_index")
-                    if section is not None:
-                        provenance = f"{source}::section-{section}"
-                    else:
-                        provenance = f"{source}::{doc_id}"
-
-                    lines.append(
-                        f"[{provenance}] (similarity: {score:.2f}) {text}"
-                    )
-
-        if low_confidence and lines:
-            lines.insert(0, "Results below similarity threshold; showing best available matches.")
-
-        if not lines:
-            return "No meaningful text chunks found in the results. Try searching with different terms."
-
-        # Return more results that passed the threshold
-        return "\n\n".join(lines[:5])  # Return top 5 results
-
-    return Tool(
-        name="semantic_search",
-        func=search_fn,
-        description=(
-            "Use this tool to perform a semantic search over uploaded documents. "
-            "Input: a query string. Output: up to three matching chunks "
-            "formatted as '[source::doc_id] snippet...'."
-        )
-    )
+# --- Keep thresholds aligned with qa.py ---
+PRIMARY_SIMILARITY_THRESHOLD = 0.6
+FALLBACK_SIMILARITY_THRESHOLD = 0.4
+MAX_MATCHES_TO_RETURN = 3
 
 
 class AgentOutput(TypedDict):
     answer: str
-    reasoning: str
+    reasoning: List[str]
     sources: Optional[List[str]]
 
-def extract_json_from_text(text: str) -> Dict:
-    """Extract JSON from text, handling cases where there might be text before or after the JSON."""
-    try:
-        # First try to parse the entire text as JSON
-        if isinstance(text, dict):
-            return text
-        return json.loads(text)
-    except json.JSONDecodeError:
-        # If that fails, try to find JSON in the text
-        if isinstance(text, str):
-            json_match = re.search(r'\{[\s\S]*\}', text)
-            if json_match:
-                try:
-                    return json.loads(json_match.group())
-                except json.JSONDecodeError:
-                    pass
-    return None
+
+# ---------------------------
+# Pinecone search tool — identical logic to RAG
+# ---------------------------
+def _pinecone_search_tool(namespace: str = "default") -> Tool:
+    """
+    Query Pinecone using the SAME branching as /ask (RAG):
+      • If EMBEDDING_MODEL in {"multilingual-e5-large","text-embedding-3-small"}:
+          compute embedding locally, then index.query(...)
+      • Else (Pinecone-managed embeddings, e.g. llama-text-embed-v2 or default):
+          index.search(namespace=..., query={top_k, inputs:{text}, model?})
+    Apply the same thresholds and format provenance-tagged snippets.
+    """
+
+    def search_fn(query: str) -> str:
+        # ---- Perform query exactly like qa.py ----
+        if EMBEDDING_MODEL in {"multilingual-e5-large", "text-embedding-3-small"}:
+            q_embed = get_embedding(text=query, model=EMBEDDING_MODEL)
+            response = index.query(
+                vector=q_embed,
+                top_k=20,                    # mirror /ask
+                include_metadata=True,
+                namespace=namespace,
+            )
+            results = response.to_dict() if hasattr(response, "to_dict") else response
+
+        else:
+            # Pinecone-managed embeddings (default or llama-text-embed-v2)
+            query_body = {"top_k": 20, "inputs": {"text": query}}
+            if EMBEDDING_MODEL == "llama-text-embed-v2":
+                query_body["model"] = "llama-text-embed-v2"
+
+            response = index.search(
+                namespace=namespace,
+                query=query_body,
+            )
+            results = response.to_dict() if hasattr(response, "to_dict") else response
+
+        matches = (results or {}).get("matches") or []
+        if not matches:
+            return "No results."
+
+        # Attach `metadata.score` (RAG does this so downstream code can read a stable field)
+        for m in matches:
+            md = m.setdefault("metadata", {})
+            if "score" not in md:
+                md["score"] = m.get("score")
+
+        # --- Apply the same threshold logic as RAG ---
+        def _filter(th: float):
+            return [m for m in matches if (m.get("score") or 0) >= th]
+
+        filtered = _filter(PRIMARY_SIMILARITY_THRESHOLD)
+        if not filtered:
+            filtered = _filter(FALLBACK_SIMILARITY_THRESHOLD)
+        if not filtered:
+            filtered = matches[:MAX_MATCHES_TO_RETURN]
+
+        # Sort & trim
+        filtered.sort(key=lambda m: m.get("score", 0), reverse=True)
+        filtered = filtered[:MAX_MATCHES_TO_RETURN]
+
+        # Format provenance-tagged snippets
+        lines: List[str] = []
+        for m in filtered:
+            md = m.get("metadata") or {}
+            text = clean_text(md.get("text") or "")
+            if not text or len(text) < 50:
+                continue
+            source = md.get("source") or md.get("file_name") or "unknown"
+            section = md.get("section_index")
+            score = md.get("score") or 0.0
+            prov = f"{source}::section-{section}" if section is not None else source
+
+            # Trim to ~1000 chars on sentence boundaries
+            if len(text) > 1000:
+                pieces = re.split(r"([.!?])\s+", text)
+                buf = ""
+                for i in range(0, len(pieces), 2):
+                    s = pieces[i] + (pieces[i + 1] if i + 1 < len(pieces) else "")
+                    if len(buf) + len(s) > 1000:
+                        break
+                    buf += s + " "
+                text = buf.strip()
+
+            lines.append(f"[{prov}] (similarity: {score:.2f}) {text}")
+
+        return "\n\n".join(lines) if lines else "No meaningful text chunks found."
+
+    return Tool(
+        name="semantic_search",
+        func=search_fn,
+        description="Search the indexed knowledge base and return up to 3 evidence snippets with provenance like [source::section-X] …",
+    )
+
+
+# ---------------------------
+# Agent construction (Zero-shot ReAct) — manages scratchpad internally
+# ---------------------------
+def _extract_sources(obs: str, limit: int = 5) -> List[str]:
+    if not isinstance(obs, str):
+        return []
+    out: List[str] = []
+    seen = set()
+    for ln in obs.splitlines():
+        ln = ln.strip()
+        if ln.startswith("["):
+            if ln not in seen:
+                out.append(ln)
+                seen.add(ln)
+            if len(out) >= limit:
+                break
+    return out
+
 
 def get_agent(namespace: str = "default", tools: list = None):
     """
-    Returns a LangChain chain that can use our Pinecone "semantic_search" tool.
-    Uses NVIDIA's Llama model with structured output.
+    Deterministic agentic controller:
+      1) Run Pinecone search (same logic as RAG) for the original query and a rephrase
+      2) Synthesize one final answer with the LLM (no ReAct loop to get 'stuck')
+    Returns: {"answer": str, "reasoning": [str], "sources": [str]}
     """
+    # Reuse our Pinecone-backed tool (mirrors RAG query behavior & thresholds)
     if tools is None:
-        # Use a fairly permissive similarity threshold so the agent can reason over weaker matches
-        tools = [_pinecone_search_tool(namespace=namespace, similarity_threshold=0.3)]
+        tools = [_pinecone_search_tool(namespace=namespace)]
+
+    # Grab the search function
+    search_tool = None
+    for t in tools:
+        if t.name == "semantic_search":
+            search_tool = t.func
+            break
+    if search_tool is None:
+        raise RuntimeError("semantic_search tool not found")
 
     llm = ChatNVIDIA(model="meta/llama-4-maverick-17b-128e-instruct", temperature=0.0)
 
-    system = """You are a helpful AI assistant that answers questions based on the provided context.
-    Follow these steps:
-    1. Break down complex questions into simpler search terms
-    2. Use the search tool multiple times with different terms if needed
-    3. If the first search doesn't yield good results, try alternative phrasings
-    4. Only provide your answer after thorough searching
-    5. Include all relevant sources in your response
+    def _compose_answer(question: str, evidence: str) -> str:
+        """Single-shot composition; no loops, no scratchpad."""
+        # If we truly found nothing, answer gracefully
+        if not evidence or evidence.strip().lower() in {"no results.", "no meaningful text chunks found."}:
+            prompt = (
+                "Question:\n"
+                f"{question}\n\n"
+                "Evidence:\n"
+                "(none)\n\n"
+                "You found no evidence in the knowledge base. Reply concisely that no information is available."
+            )
+            return llm.invoke(prompt).content
 
-    CRITICAL: You MUST output ONLY a JSON object, with no text before or after it. DO NOT include your thought process or reasoning in the output.
-    The JSON must look exactly like this:
-    {{
-        "answer": "The final answer to the question",
-        "reasoning": [
-            "First, I considered...",
-            "Then, I looked at...",
-            "Finally, I concluded..."
-        ],
-        "sources": [
-            "[source1::chunk_id] relevant snippet...",
-            "[source2::chunk_id] relevant snippet..."
-        ]
-    }}
+        prompt = (
+            "You are answering based ONLY on the evidence below. "
+            "If the evidence supports a clear answer, answer it directly and cite the sources in parentheses "
+            "using the bracketed provenance lines.\n\n"
+            f"Question:\n{question}\n\n"
+            f"Evidence snippets (each starts with a bracketed provenance like [source::section-X]):\n{evidence}\n\n"
+            "Write a concise answer in 1–2 sentences. If relevant, include the most helpful provenance lines in parentheses."
+        )
+        return llm.invoke(prompt).content
 
-    Rules:
-    - Output ONLY the JSON object, nothing else
-    - DO NOT include any text before or after the JSON
-    - DO NOT include your thought process in the output
-    - The answer field must be a string with your final answer
-    - The reasoning field must be an array of strings, where each string is one step in your reasoning
-    - The sources field must be an array of strings, where each string is a source from the search tool
-    - Make sure the JSON is properly formatted with double quotes
-    - Each step in reasoning should be a separate string in the array
-    - If you used the search tool, include the exact source strings in the sources array
-    - If you can't find information after multiple searches, say so in your answer
-    - Don't make up information - if you can't find it, say you don't know
-    """
-
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", system),
-        ("human", "{input}"),
-        MessagesPlaceholder(variable_name="agent_scratchpad")
-    ])
-
-    # Create the agent
-    agent = create_openai_functions_agent(llm, tools, prompt)
-    
-    # Create the agent executor
-    agent_executor = AgentExecutor(
-        agent=agent,
-        tools=tools,
-        verbose=True,
-        handle_parsing_errors=True,
-        return_intermediate_steps=True,
-    )
-
-    def _invoke(inputs: Dict[str, Any]) -> Dict[str, Any]:
-        result = agent_executor.invoke(inputs)
-        output = result.get("output", result)
-
-        parsed = extract_json_from_text(output)
-        if parsed is None:
-            parsed = {
-                "answer": str(output),
-                "reasoning": result.get("intermediate_steps", []),
+    def _invoke(inputs: Dict[str, Any] | str) -> AgentOutput:
+        # Normalize input
+        if isinstance(inputs, str):
+            question = inputs
+        elif isinstance(inputs, dict):
+            question = inputs.get("input") or inputs.get("question")
+            if not isinstance(question, str):
+                # Fallback: first string value
+                question = next((v for v in inputs.values() if isinstance(v, str)), "")
+        else:
+            raise ValueError("Unsupported input type for agent")
+        question = (question or "").strip()
+        if not question:
+            return {
+                "answer": "I couldn't find a definitive answer.",
+                "reasoning": ["No question text was provided."],
                 "sources": [],
             }
 
-        return parsed
+        # Phase 1: search (original + simple rephrase)
+        reasoning: List[str] = []
+        observations: List[str] = []
+
+        q1 = question
+        q2 = re.sub(r"\b(knows?|know|knowledge of)\b", "skills with", question, flags=re.I)
+        q2 = q2 if q2 != q1 else f"{question} skills resume profile"
+
+        obs1 = search_tool(q1)
+        observations.append(obs1)
+        reasoning.append(f'Used semantic_search with: {q1}')
+
+        # If first search is thin, try the rephrase
+        if (not obs1) or ("No results" in obs1) or (obs1.strip().count("\n[") + obs1.strip().startswith("[") * 1) < 1:
+            obs2 = search_tool(q2)
+            observations.append(obs2)
+            reasoning.append(f'Used semantic_search with: {q2}')
+
+        # Merge evidence (prefer the first search’s top lines)
+        evidence_blocks = [o for o in observations if isinstance(o, str) and o.strip()]
+        merged_evidence = "\n\n".join(evidence_blocks[:2])
+
+        # Collect sources from bracketed lines
+        def _extract_sources(text: str, limit: int = 5) -> List[str]:
+            out, seen = [], set()
+            for ln in (text or "").splitlines():
+                s = ln.strip()
+                if s.startswith("[") and s not in seen:
+                    out.append(s)
+                    seen.add(s)
+                if len(out) >= limit:
+                    break
+            return out
+
+        sources = _extract_sources(merged_evidence, limit=5)
+
+        # Phase 2: compose final answer (single LLM call)
+        final_answer = _compose_answer(question, merged_evidence)
+
+        return {
+            "answer": final_answer or "I couldn't find a definitive answer.",
+            "reasoning": reasoning or ["Searched the knowledge base and summarized the best-matching evidence."],
+            "sources": sources,
+        }
 
     return RunnableLambda(_invoke)
