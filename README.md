@@ -1,11 +1,8 @@
 # AgenticQA
+A modern, agent-powered document Q&A system. Upload your docs, ask questions, and get smart, context-rich answers—powered by an LLM agent that searches, reasons, and cites its sources.
+<img width="1000" height="980" alt="image" src="https://github.com/user-attachments/assets/829111ea-915c-428c-b6ca-4c4202187b3f" />
 
-*A modern, agent-powered document Q&A system. Upload your docs, ask questions, and get smart, context-rich answers—powered by an LLM agent that searches, reasons, and cites its sources.*
-- **RAG**
-![image](https://github.com/user-attachments/assets/0720bff2-209a-4d3a-b685-e02cd42030dc)
-- **Agentic Retrieval**
-![image](https://github.com/user-attachments/assets/62128bb3-8139-45c9-8d07-8ce4012b035e)
-<img width="994" height="893" alt="image" src="https://github.com/user-attachments/assets/6b88b440-9efc-4f9f-8816-9708cf112c76" />
+
 
 ---
 
