@@ -5,18 +5,19 @@ import re
 from typing import List, Dict, Any, Optional
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 
-from utils import get_embedding  
-from pinecone_client import index 
+from pinecone_client import index
 from config import EMBEDDING_MODEL
 from logger import logger
+
 
 def clean_text(text: str) -> str:
     """Clean and normalize text."""
     # Remove extra whitespace
-    text = re.sub(r'\s+', ' ', text)
+    text = re.sub(r"\s+", " ", text)
     # Remove special characters but keep punctuation
-    text = re.sub(r'[^\w\s.,!?-]', '', text)
+    text = re.sub(r"[^\w\s.,!?-]", "", text)
     return text.strip()
+
 
 def is_meaningful_chunk(text: str) -> bool:
     """Check if a chunk contains meaningful content."""
@@ -24,43 +25,46 @@ def is_meaningful_chunk(text: str) -> bool:
     text = text.strip()
     if len(text) < 50:  # Too short to be meaningful
         return False
-        
+
     # Check if it's just a list of names or numbers
-    if re.match(r'^[\d\s.,]+$', text):  # Just numbers
+    if re.match(r"^[\d\s.,]+$", text):  # Just numbers
         return False
-    if re.match(r'^[A-Z][a-z]+\s+[A-Z][a-z]+(\s+[A-Z][a-z]+)*$', text):  # Just names
+    if re.match(r"^[A-Z][a-z]+\s+[A-Z][a-z]+(\s+[A-Z][a-z]+)*$", text):  # Just names
         return False
-        
+
     # Check if it's just citations/references
-    if re.match(r'^.*\d{4}\.?\s+URL\s+https?://.*$', text):  # Just a URL citation
+    if re.match(r"^.*\d{4}\.?\s+URL\s+https?://.*$", text):  # Just a URL citation
         return False
-    if re.match(r'^.*arXiv:?\d{4}\.\d{4,5}.*$', text):  # Just an arXiv citation
+    if re.match(r"^.*arXiv:?\d{4}\.\d{4,5}.*$", text):  # Just an arXiv citation
         return False
-        
+
     # Check if it contains actual sentences
-    if not re.search(r'[.!?]', text):  # No sentence endings
+    if not re.search(r"[.!?]", text):  # No sentence endings
         return False
-        
+
     # Check if it's just a page number
-    if re.match(r'^\d+$', text):
+    if re.match(r"^\d+$", text):
         return False
-        
+
     return True
 
-def chunk_text(text: str, chunk_size: int = 2000, chunk_overlap: int = 400) -> List[str]:
+
+def chunk_text(
+    text: str, chunk_size: int = 2000, chunk_overlap: int = 400
+) -> List[str]:
     """Split text into meaningful chunks."""
     # First split by double newlines to preserve document structure
-    sections = re.split(r'\n\s*\n', text)
-    
+    sections = re.split(r"\n\s*\n", text)
+
     meaningful_chunks = []
     current_chunk = ""
-    
+
     for section in sections:
         # Clean the section
         section = clean_text(section)
         if not section:
             continue
-            
+
         # If section is meaningful on its own, keep it as a chunk
         if is_meaningful_chunk(section):
             if len(current_chunk) + len(section) <= chunk_size:
@@ -70,15 +74,15 @@ def chunk_text(text: str, chunk_size: int = 2000, chunk_overlap: int = 400) -> L
                     meaningful_chunks.append(current_chunk.strip())
                 current_chunk = section
             continue
-            
+
         # Otherwise, split the section into smaller chunks
         text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
             length_function=len,
-            separators=["\n", ".", "!", "?", ",", " ", ""]
+            separators=["\n", ".", "!", "?", ",", " ", ""],
         )
-        
+
         chunks = text_splitter.split_text(section)
         for chunk in chunks:
             if is_meaningful_chunk(chunk):
@@ -88,11 +92,12 @@ def chunk_text(text: str, chunk_size: int = 2000, chunk_overlap: int = 400) -> L
                     if current_chunk:
                         meaningful_chunks.append(current_chunk.strip())
                     current_chunk = chunk
-    
+
     if current_chunk:
         meaningful_chunks.append(current_chunk.strip())
-    
+
     return meaningful_chunks
+
 
 def upsert_doc(
     doc_text: str,
@@ -103,56 +108,61 @@ def upsert_doc(
 ):
     """
     Upsert a document to Pinecone with proper chunking and metadata.
-    
-    Args:
-        doc_text: The text content of the document
-        doc_id: Unique identifier for the document
-        source: Source of the document (e.g., filename)
-        namespace: Pinecone namespace
+    Uses batch embeddings when EMBEDDING_MODEL is set to a client-side embedder.
     """
     # Clean the text
     doc_text = clean_text(doc_text)
-    
+
     # Split into chunks
     chunks = chunk_text(doc_text)
-    
-    # Prepare vectors and metadata
+
+    # Decide whether to embed client-side (OpenAI/HF) or let Pinecone embed
+    client_side_embed = EMBEDDING_MODEL in {
+        "multilingual-e5-large",
+        "text-embedding-3-small",
+    }
+
     vectors = []
+    embeddings: Optional[List[List[float]]] = None
+
+    if client_side_embed and chunks:
+        # Batch embed all chunks in a single call
+        from runtime import embed_texts
+
+        embeddings = embed_texts(chunks, prefer=EMBEDDING_MODEL)
+
     for i, chunk in enumerate(chunks):
         chunk_id = f"{doc_id}_chunk_{i}"
-        
-        # Get embedding
-        if EMBEDDING_MODEL in {"multilingual-e5-large", "text-embedding-3-small"}:
-            vec = get_embedding(chunk, EMBEDDING_MODEL)
-            # Convert numpy → list if necessary
+        vec = None
+        if client_side_embed and embeddings is not None:
+            vec = embeddings[i]
+            # safety cast if needed
             if isinstance(vec, np.ndarray):
                 vec = vec.astype("float32").tolist()
-        else:
-            vec = None  # Let Pinecone handle embedding
-            
-        # Create metadata
+
         metadata = {
             "text": chunk,
             "source": source,
             "doc_id": doc_id,
             "chunk_id": i,
-            "total_chunks": len(chunks)
+            "total_chunks": len(chunks),
         }
-
         if metadata_extra:
             metadata.update(metadata_extra)
-        
-        vectors.append({
-            "id": chunk_id,
-            "values": vec,
-            "metadata": metadata
-        })
-    
+
+        vectors.append(
+            {
+                "id": chunk_id,
+                "values": vec,  # None => Pinecone-managed embedding path
+                "metadata": metadata,
+            }
+        )
+
     # Upsert in batches of 100
     batch_size = 100
     upserted_total = 0
     for i in range(0, len(vectors), batch_size):
-        batch = vectors[i:i + batch_size]
+        batch = vectors[i : i + batch_size]
         try:
             response = index.upsert(batch, namespace=namespace)
         except Exception as exc:

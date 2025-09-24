@@ -12,19 +12,16 @@ if not pc.has_index(PINECONE_INDEX_NAME):
             name=PINECONE_INDEX_NAME,
             cloud="aws",
             region="us-east-1",
-            embed={
-                "model": EMBEDDING_MODEL,
-                "field_map": {"text": "text"}
-            }
+            embed={"model": EMBEDDING_MODEL, "field_map": {"text": "text"}},
         )
     else:
-        # No EMBEDDING_MODEL -> create a vanilla index so Pinecone’s built-in (text-embedding-3-small) is used        
+        # No EMBEDDING_MODEL -> create a vanilla index so Pinecone’s built-in (text-embedding-3-small) is used
         pc.create_index(
             name=PINECONE_INDEX_NAME,
-            dimension=1536,    # default dimension for text-embedding-3-small
+            dimension=1536,  # default dimension for text-embedding-3-small
             metric="cosine",
             cloud="aws",
-            region="us-east-1"
+            region="us-east-1",
         )
 
 index = pc.Index(PINECONE_INDEX_NAME)

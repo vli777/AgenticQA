@@ -14,7 +14,9 @@ NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY")
 
 _cors_origins_raw = os.getenv("CORS_ORIGINS")
 if _cors_origins_raw:
-    CORS_ORIGINS = [origin.strip() for origin in _cors_origins_raw.split(",") if origin.strip()]
+    CORS_ORIGINS = [
+        origin.strip() for origin in _cors_origins_raw.split(",") if origin.strip()
+    ]
 else:
     CORS_ORIGINS = ["*"]
 

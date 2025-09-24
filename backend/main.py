@@ -21,16 +21,16 @@ app.include_router(qa_router, prefix="/ask", tags=["qa"])
 
 if DEBUG:
     from routes.debug import router as debug_router
+
     app.include_router(debug_router, prefix="/debug")
 
 embedding = None
 if EMBEDDING_MODEL:
     embedding = get_embedding(
-        text="Embedding model set to " + EMBEDDING_MODEL,
-        model=EMBEDDING_MODEL
+        text="Embedding model set to " + EMBEDDING_MODEL, model=EMBEDDING_MODEL
     )
-    
+
+
 @app.get("/")
 def root():
     return {"message": "AgenticQA running"}
-
