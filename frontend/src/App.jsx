@@ -20,6 +20,9 @@ function App() {
   const [chatMode, setChatMode] = useState('agentic')
   const [isSending, setIsSending] = useState(false)
   const [chatError, setChatError] = useState('')
+  const [isClearing, setIsClearing] = useState(false)
+  const [clearMessage, setClearMessage] = useState('')
+  const [clearError, setClearError] = useState('')
 
   const fileInputRef = useRef(null)
 
@@ -33,11 +36,55 @@ function App() {
     setSelectedFiles(files)
     setUploadError('')
     setUploadSummary(null)
+    setClearMessage('')
+    setClearError('')
+  }
+
+  const handleRemoveSelectedFile = (index) => {
+    setSelectedFiles((prev) => {
+      const next = [...prev]
+      next.splice(index, 1)
+      if (!next.length && fileInputRef.current) {
+        fileInputRef.current.value = ''
+      }
+      return next
+    })
   }
 
   const handleNamespaceBlur = () => {
     if (!namespace.trim()) {
       setNamespace(DEFAULT_NAMESPACE)
+    }
+  }
+
+  const handleClearNamespace = async () => {
+    if (isClearing) return
+    const ns = sanitizedNamespace
+    const confirmed = window.confirm(`Delete all indexed vectors in namespace "${ns}"? This cannot be undone.`)
+    if (!confirmed) return
+
+    setIsClearing(true)
+    setClearMessage('')
+    setClearError('')
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/debug/namespace/${encodeURIComponent(ns)}`, {
+        method: 'DELETE',
+      })
+
+      if (!response.ok) {
+        const detail = await response.json().catch(() => ({}))
+        throw new Error(detail?.detail || `Failed to clear namespace (status ${response.status})`)
+      }
+
+      const data = await response.json().catch(() => ({}))
+      setClearMessage(`Namespace "${data?.namespace ?? ns}" cleared.`)
+      setUploadSummary(null)
+      setMessages([])
+    } catch (error) {
+      setClearError(error.message || 'Unexpected error while clearing namespace.')
+    } finally {
+      setIsClearing(false)
     }
   }
 
@@ -208,7 +255,17 @@ function App() {
         </header>
 
         <section className="namespace-section">
-          <label htmlFor="namespace">Namespace</label>
+          <div className="namespace-header">
+            <label htmlFor="namespace">Namespace</label>
+            <button
+              type="button"
+              className="clear-namespace"
+              onClick={handleClearNamespace}
+              disabled={isClearing}
+            >
+              {isClearing ? 'Clearing…' : 'Clear'}
+            </button>
+          </div>
           <input
             id="namespace"
             type="text"
@@ -219,6 +276,8 @@ function App() {
             autoComplete="off"
           />
           <p className="field-hint">Use namespaces to keep document sets separate. Leave as "default" for a single corpus.</p>
+          {clearMessage ? <p className="success-message namespace-message">{clearMessage}</p> : null}
+          {clearError ? <p className="error-message namespace-message">{clearError}</p> : null}
         </section>
 
         <section className="upload-section">
@@ -238,8 +297,17 @@ function App() {
 
           {selectedFiles.length ? (
             <ul className="selected-files">
-              {selectedFiles.map((file) => (
-                <li key={file.name}>{file.name}</li>
+              {selectedFiles.map((file, index) => (
+                <li key={`${file.name}-${index}`}>
+                  <span>{file.name}</span>
+                  <button
+                    type="button"
+                    aria-label={`Remove ${file.name}`}
+                    onClick={() => handleRemoveSelectedFile(index)}
+                  >
+                    ×
+                  </button>
+                </li>
               ))}
             </ul>
           ) : (
@@ -260,7 +328,9 @@ function App() {
             </div>
           ) : null}
 
+          {clearMessage ? <p className="success-message">{clearMessage}</p> : null}
           {uploadError ? <p className="error-message">{uploadError}</p> : null}
+          {clearError ? <p className="error-message">{clearError}</p> : null}
         </section>
       </aside>
 
