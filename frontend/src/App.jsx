@@ -40,17 +40,6 @@ function App() {
     setClearError('')
   }
 
-  const handleRemoveSelectedFile = (index) => {
-    setSelectedFiles((prev) => {
-      const next = [...prev]
-      next.splice(index, 1)
-      if (!next.length && fileInputRef.current) {
-        fileInputRef.current.value = ''
-      }
-      return next
-    })
-  }
-
   const handleNamespaceBlur = () => {
     if (!namespace.trim()) {
       setNamespace(DEFAULT_NAMESPACE)
@@ -294,25 +283,6 @@ function App() {
               onChange={handleFileSelection}
             />
           </label>
-
-          {selectedFiles.length ? (
-            <ul className="selected-files">
-              {selectedFiles.map((file, index) => (
-                <li key={`${file.name}-${index}`}>
-                  <span>{file.name}</span>
-                  <button
-                    type="button"
-                    aria-label={`Remove ${file.name}`}
-                    onClick={() => handleRemoveSelectedFile(index)}
-                  >
-                    ×
-                  </button>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="field-hint">Choose one or more files to index.</p>
-          )}
 
           <button type="button" onClick={handleUpload} disabled={isUploading}>
             {isUploading ? 'Uploading…' : 'Upload & Index'}
