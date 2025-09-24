@@ -35,6 +35,13 @@
   gap: 12px;
 }
 
+.namespace-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .namespace-section label,
 .upload-section h2 {
   font-size: 0.95rem;
@@ -93,6 +100,39 @@
   color: #374151;
 }
 
+.selected-files li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.selected-files li span {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.selected-files li button {
+  border: none;
+  background: transparent;
+  color: #9ca3af;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+  transition: color 0.2s ease;
+}
+
+.selected-files li button:hover {
+  color: #ef4444;
+}
+
 .side-panel button {
   padding: 10px 14px;
   font-size: 0.95rem;
@@ -103,6 +143,27 @@
   color: #ffffff;
   cursor: pointer;
   transition: background 0.2s ease;
+}
+
+.namespace-header .clear-namespace {
+  padding: 4px 10px;
+  font-size: 0.78rem;
+  border: 1px solid #ef4444;
+  border-radius: 999px;
+  background: transparent;
+  color: #ef4444;
+  font-weight: 600;
+}
+
+.namespace-header .clear-namespace:not(:disabled):hover {
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.namespace-header .clear-namespace:disabled {
+  opacity: 0.55;
+  color: #fca5a5;
+  border-color: #fca5a5;
+  cursor: not-allowed;
 }
 
 .side-panel button:disabled {
@@ -120,6 +181,16 @@
   background: #ecfdf5;
   color: #047857;
   font-size: 0.9rem;
+}
+
+.success-message {
+  margin: 8px 0 0;
+  color: #047857;
+  font-size: 0.9rem;
+}
+
+.namespace-message {
+  margin-top: 4px;
 }
 
 .error-message {
