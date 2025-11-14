@@ -3,7 +3,16 @@
 import json
 import re
 from fastapi import APIRouter
+
+from config import ENABLE_CACHING
 from pinecone_client import pc, index
+from hybrid_search import hybrid_search_engine
+from logger import logger
+
+if ENABLE_CACHING:
+    from cache import clear_all_caches
+else:
+    clear_all_caches = None
 
 router = APIRouter()
 
@@ -33,7 +42,39 @@ def list_indexes():
 
 
 @router.delete("/namespace/{namespace}")
-def clear_namespace(namespace: str):
-    """Delete all vectors within a Pinecone namespace."""
-    index.delete(delete_all=True, namespace=namespace)
-    return {"namespace": namespace, "status": "cleared"}
+async def clear_namespace(namespace: str):
+    """Delete all vectors within a Pinecone namespace and reset caches."""
+    logger.info("Clearing namespace '%s' via debug endpoint", namespace)
+
+    vectors_deleted = True
+    delete_warning = None
+    try:
+        index.delete(delete_all=True, namespace=namespace)
+    except Exception as exc:
+        vectors_deleted = False
+        delete_warning = str(exc)
+        logger.warning(
+            "Pinecone delete failed for namespace '%s' (treating as already empty): %s",
+            namespace,
+            exc,
+        )
+
+    hybrid_search_engine.clear_cache(namespace)
+
+    caches_cleared = False
+    if clear_all_caches is not None:
+        try:
+            await clear_all_caches()
+            caches_cleared = True
+        except Exception as exc:
+            logger.warning("Failed to clear caches after namespace delete: %s", exc)
+
+    payload = {
+        "namespace": namespace,
+        "status": "cleared",
+        "caches_cleared": caches_cleared,
+        "vectors_deleted": vectors_deleted,
+    }
+    if delete_warning:
+        payload["warning"] = delete_warning
+    return payload
