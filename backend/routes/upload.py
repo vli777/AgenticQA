@@ -6,8 +6,7 @@ from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain.schema import Document
 import re
 
-from utils import extract_text_from_pdf_bytes, chunk_document_text
-from services import upsert_doc, chunk_text
+from services import upsert_doc
 from logger import logger
 
 router = APIRouter()
@@ -24,7 +23,8 @@ def load_and_chunk_documents(
     lower = filename.lower()
     if lower.endswith(".pdf"):
         # PyPDFLoader expects a file path, so we need to write bytes to a temp file
-        import tempfile, os
+        import tempfile
+        import os
 
         suffix = ".pdf"
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
@@ -80,7 +80,8 @@ def load_and_chunk_documents(
 
     elif lower.endswith(".txt"):
         # TextLoader also expects a file path
-        import tempfile, os
+        import tempfile
+        import os
 
         suffix = ".txt"
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, mode="wb") as tmp:

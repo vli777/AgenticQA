@@ -9,18 +9,16 @@ from langchain_nvidia_ai_endpoints import ChatNVIDIA
 
 from logger import logger
 from config import (
-    EMBEDDING_MODEL, OPENAI_API_KEY, BM25_K, VECTOR_K,
+    BM25_K, VECTOR_K,
     ENABLE_CACHING, ENABLE_STREAMING
 )
 from models import AskRequest
-from utils import get_embedding
-from pinecone_client import index
-from langchain_agent import get_agent, AgentOutput
+from langchain_agent import get_agent
 from langchain_core.output_parsers.json import JsonOutputParser
 from hybrid_search import hybrid_search_engine
 
 if ENABLE_CACHING:
-    from cache import search_cache, llm_cache, get_all_cache_stats, clear_all_caches
+    from cache import search_cache, get_all_cache_stats, clear_all_caches
 
 json_parser = JsonOutputParser()
 
@@ -56,7 +54,7 @@ def clean_text(text: str) -> str:
     # Ensure proper sentence structure
     if text and not text[0].isupper():
         text = text[0].upper() + text[1:]
-    if text and not text[-1] in '.!?':
+    if text and text[-1] not in '.!?':
         text += '.'
     return text
 
