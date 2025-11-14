@@ -3,17 +3,24 @@
 import re
 import json
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
 # from langchain_openai import ChatOpenAI
 
 from logger import logger
-from config import EMBEDDING_MODEL, OPENAI_API_KEY, HYBRID_SEARCH_ALPHA, RETRIEVAL_K
+from config import (
+    EMBEDDING_MODEL, OPENAI_API_KEY, HYBRID_SEARCH_ALPHA, RETRIEVAL_K,
+    ENABLE_CACHING, ENABLE_STREAMING
+)
 from models import AskRequest
 from utils import get_embedding
 from pinecone_client import index
 from langchain_agent import get_agent, AgentOutput
 from langchain_core.output_parsers.json import JsonOutputParser
 from hybrid_search import hybrid_search_engine
+
+if ENABLE_CACHING:
+    from cache import search_cache, llm_cache, get_all_cache_stats, clear_all_caches
 
 json_parser = JsonOutputParser()
 
@@ -76,6 +83,19 @@ async def ask(req: AskRequest):
     """
     logger.info(f"Using hybrid search with re-ranking for question: '{req.question}'")
 
+    # Check cache if enabled
+    if ENABLE_CACHING:
+        cached = await search_cache.get(
+            query=req.question,
+            namespace=req.namespace,
+            top_k=MAX_MATCHES_TO_RETURN,
+            alpha=HYBRID_SEARCH_ALPHA,
+            retrieval_k=RETRIEVAL_K
+        )
+        if cached is not None:
+            logger.info("Returning cached search results")
+            return {"results": {"matches": cached}, "cached": True}
+
     # Use hybrid search with re-ranking
     # retrieval_k from config (default 20) means we get results from hybrid search before re-ranking
     # top_k=MAX_MATCHES_TO_RETURN (3) is the final number after re-ranking
@@ -113,9 +133,20 @@ async def ask(req: AskRequest):
 
     results = {"matches": matches}
 
+    # Cache results if enabled
+    if ENABLE_CACHING:
+        await search_cache.set(
+            query=req.question,
+            namespace=req.namespace,
+            top_k=MAX_MATCHES_TO_RETURN,
+            results=matches,
+            alpha=HYBRID_SEARCH_ALPHA,
+            retrieval_k=RETRIEVAL_K
+        )
+
     logger.info(f"Hybrid search returned {len(matches)} re-ranked results")
 
-    return {"results": results}
+    return {"results": results, "cached": False}
 
 
 @router.post("/agentic")
@@ -129,11 +160,11 @@ async def ask_agentic(req: AskRequest):
         # Pass the input as a dictionary
         result = chain.invoke({"input": req.question})
         logger.info(f"Chain output: {result}")
-        
+
         # Ensure the result has the required fields
         if not isinstance(result, dict):
             result = {"answer": str(result), "reasoning": "Direct response", "sources": []}
-        
+
         # Ensure all required fields exist
         if "answer" not in result:
             result["answer"] = str(result)
@@ -141,7 +172,7 @@ async def ask_agentic(req: AskRequest):
             result["reasoning"] = "No reasoning provided"
         if "sources" not in result:
             result["sources"] = []
-            
+
         return result
     except Exception as e:
         logger.error(f"Error in agentic QA: {str(e)}")
@@ -151,3 +182,93 @@ async def ask_agentic(req: AskRequest):
             "reasoning": f"{type(e).__name__}: {str(e)}",
             "sources": []
         }
+
+
+@router.post("/stream")
+async def ask_stream(req: AskRequest):
+    """
+    Streaming endpoint for real-time token-by-token responses.
+    Returns Server-Sent Events (SSE) stream.
+    """
+    if not ENABLE_STREAMING:
+        raise HTTPException(status_code=501, detail="Streaming is not enabled")
+
+    async def generate():
+        """Generate streaming response."""
+        try:
+            # First, get search results
+            reranked_results = await hybrid_search_engine.hybrid_search_with_rerank(
+                query=req.question,
+                namespace=req.namespace,
+                top_k=MAX_MATCHES_TO_RETURN,
+                retrieval_k=RETRIEVAL_K,
+                alpha=HYBRID_SEARCH_ALPHA
+            )
+
+            if not reranked_results:
+                yield json.dumps({"type": "error", "content": "No relevant documents found"}) + "\n"
+                return
+
+            # Format context from results
+            context_parts = []
+            for result in reranked_results:
+                text = result.get("metadata", {}).get("text", "")
+                source = result.get("metadata", {}).get("source", "unknown")
+                context_parts.append(f"[{source}] {text[:500]}")
+
+            context = "\n\n".join(context_parts)
+
+            # Create streaming LLM
+            streaming_llm = ChatNVIDIA(
+                model="meta/llama-4-maverick-17b-128e-instruct",
+                temperature=0.0,
+                streaming=True
+            )
+
+            prompt = f"""Based on the following context, answer the question concisely.
+
+Context:
+{context}
+
+Question: {req.question}
+
+Answer:"""
+
+            # Send sources first
+            sources = [r.get("metadata", {}).get("source", "unknown") for r in reranked_results]
+            yield json.dumps({"type": "sources", "content": sources}) + "\n"
+
+            # Stream tokens
+            async for chunk in streaming_llm.astream(prompt):
+                if hasattr(chunk, "content"):
+                    yield json.dumps({"type": "token", "content": chunk.content}) + "\n"
+
+            # Send completion signal
+            yield json.dumps({"type": "done"}) + "\n"
+
+        except Exception as e:
+            logger.error(f"Streaming error: {str(e)}")
+            yield json.dumps({"type": "error", "content": str(e)}) + "\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@router.get("/cache/stats")
+async def get_cache_stats():
+    """Get statistics for all caches."""
+    if not ENABLE_CACHING:
+        return {"caching_enabled": False}
+
+    stats = get_all_cache_stats()
+    stats["caching_enabled"] = True
+    return stats
+
+
+@router.post("/cache/clear")
+async def clear_cache():
+    """Clear all caches."""
+    if not ENABLE_CACHING:
+        raise HTTPException(status_code=501, detail="Caching is not enabled")
+
+    await clear_all_caches()
+    return {"status": "success", "message": "All caches cleared"}
