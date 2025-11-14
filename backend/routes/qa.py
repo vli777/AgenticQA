@@ -6,13 +6,14 @@ from fastapi import APIRouter, HTTPException
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
 # from langchain_openai import ChatOpenAI
 
-from logger import logger  
-from config import EMBEDDING_MODEL, OPENAI_API_KEY
+from logger import logger
+from config import EMBEDDING_MODEL, OPENAI_API_KEY, HYBRID_SEARCH_ALPHA, RETRIEVAL_K
 from models import AskRequest
 from utils import get_embedding
 from pinecone_client import index
 from langchain_agent import get_agent, AgentOutput
 from langchain_core.output_parsers.json import JsonOutputParser
+from hybrid_search import hybrid_search_engine
 
 json_parser = JsonOutputParser()
 
@@ -68,78 +69,51 @@ async def improve_grammar(text: str) -> str:
         return text  # Return original text if LLM fails
 
 @router.post("/")
-async def ask(req: AskRequest):    
+async def ask(req: AskRequest):
     """
-    Simple semantic-search endpoint using vanilla RAG. Mounted at POST /ask/ because main.py uses prefix="/ask".
+    Hybrid search endpoint using BM25 + vector embeddings with cross-encoder re-ranking.
+    Mounted at POST /ask/ because main.py uses prefix="/ask".
     """
-    if EMBEDDING_MODEL in {"multilingual-e5-large", "text-embedding-3-small"}:
-        logger.info(f"Using embedding model: {EMBEDDING_MODEL}")
-        # Local/E5 or OpenAI models: compute vector locally, then do a vector query        
-        q_embed = get_embedding(text=req.question, model=EMBEDDING_MODEL)
-        response = index.query(
-            vector=q_embed,
-            top_k=20,  # Get more results to ensure we have enough above threshold
-            include_metadata=True,
-            namespace=req.namespace
-        )
+    logger.info(f"Using hybrid search with re-ranking for question: '{req.question}'")
 
-    else:
-        # Pinecone-managed embeddings (either default or LLaMA)
-        if EMBEDDING_MODEL == "llama-text-embed-v2":
-            logger.info(f"Using embedding model: {EMBEDDING_MODEL}")
-        else:
-            logger.info("Using embedding model: text-embedding-3-small")
-            
-        query_body = {"top_k": 20, "inputs": {"text": req.question}}  # Get more results to ensure we have enough above threshold
+    # Use hybrid search with re-ranking
+    # retrieval_k from config (default 20) means we get results from hybrid search before re-ranking
+    # top_k=MAX_MATCHES_TO_RETURN (3) is the final number after re-ranking
+    # alpha from config (default 0.5) controls weight for BM25 vs vector search
+    reranked_results = await hybrid_search_engine.hybrid_search_with_rerank(
+        query=req.question,
+        namespace=req.namespace,
+        top_k=MAX_MATCHES_TO_RETURN,
+        retrieval_k=RETRIEVAL_K,
+        alpha=HYBRID_SEARCH_ALPHA
+    )
 
-        if EMBEDDING_MODEL == "llama-text-embed-v2":            
-            query_body["model"] = "llama-text-embed-v2"
+    # Convert to the expected format
+    matches = []
+    for result in reranked_results:
+        match = {
+            "id": result["id"],
+            "score": result["rerank_score"],  # Use re-rank score as primary score
+            "metadata": result["metadata"]
+        }
 
-        response = index.search(
-            namespace=req.namespace,
-            query=query_body
-        )
-    
-    results = response.to_dict()
+        # Attach all scores to metadata for transparency
+        match["metadata"]["rerank_score"] = result["rerank_score"]
+        match["metadata"]["original_score"] = result.get("original_score", 0.0)
+        match["metadata"]["bm25_score"] = result.get("bm25_score", 0.0)
+        match["metadata"]["vector_score"] = result.get("vector_score", 0.0)
 
-    matches = results.get("matches") or []
-    if matches:
-        # Attach score into metadata to help downstream consumers
-        for match in matches:
-            metadata = match.setdefault("metadata", {})
-            if "score" not in metadata:
-                metadata["score"] = match.get("score")
+        # Clean and improve text
+        if "text" in match["metadata"]:
+            text = clean_text(match["metadata"]["text"])
+            text = await improve_grammar(text)
+            match["metadata"]["text"] = text
 
-        def _filter(by_threshold: float):
-            return [m for m in matches if (m.get("score") or 0) >= by_threshold]
+        matches.append(match)
 
-        filtered_matches = _filter(PRIMARY_SIMILARITY_THRESHOLD)
-        if not filtered_matches:
-            filtered_matches = _filter(FALLBACK_SIMILARITY_THRESHOLD)
-            if filtered_matches:
-                logger.info(
-                    "Falling back to relaxed similarity threshold %.2f for question '%s'",
-                    FALLBACK_SIMILARITY_THRESHOLD,
-                    req.question,
-                )
+    results = {"matches": matches}
 
-        if not filtered_matches:
-            filtered_matches = matches[:MAX_MATCHES_TO_RETURN]
-            if filtered_matches:
-                logger.info(
-                    "Returning lowest-ranked matches because similarity thresholds yielded none (question='%s')",
-                    req.question,
-                )
-
-        # Sort by score (highest first) and trim to requested limit
-        filtered_matches.sort(key=lambda m: m.get("score", 0), reverse=True)
-        results["matches"] = filtered_matches[:MAX_MATCHES_TO_RETURN]
-
-        for match in results["matches"]:
-            if "metadata" in match and "text" in match["metadata"]:
-                text = clean_text(match["metadata"]["text"])
-                text = await improve_grammar(text)
-                match["metadata"]["text"] = text
+    logger.info(f"Hybrid search returned {len(matches)} re-ranked results")
 
     return {"results": results}
 

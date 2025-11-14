@@ -2,6 +2,7 @@
 
 import re
 import json
+import asyncio
 from typing import List, Any, Dict, TypedDict, Optional
 
 from langchain.tools import Tool
@@ -9,10 +10,11 @@ from langchain_nvidia_ai_endpoints import ChatNVIDIA
 from langchain.agents import initialize_agent, AgentType
 from langchain_core.runnables import RunnableLambda
 
-from config import EMBEDDING_MODEL
+from config import EMBEDDING_MODEL, HYBRID_SEARCH_ALPHA, RETRIEVAL_K
 from utils import get_embedding
 from pinecone_client import index
 from services import clean_text  # reuse the shared cleaner
+from hybrid_search import hybrid_search_engine
 
 # --- Keep thresholds aligned with qa.py ---
 PRIMARY_SIMILARITY_THRESHOLD = 0.6
@@ -31,72 +33,42 @@ class AgentOutput(TypedDict):
 # ---------------------------
 def _pinecone_search_tool(namespace: str = "default") -> Tool:
     """
-    Query Pinecone using the SAME branching as /ask (RAG):
-      • If EMBEDDING_MODEL in {"multilingual-e5-large","text-embedding-3-small"}:
-          compute embedding locally, then index.query(...)
-      • Else (Pinecone-managed embeddings, e.g. llama-text-embed-v2 or default):
-          index.search(namespace=..., query={top_k, inputs:{text}, model?})
-    Apply the same thresholds and format provenance-tagged snippets.
+    Hybrid search tool using BM25 + vector embeddings with cross-encoder re-ranking.
+    Returns top-ranked evidence snippets with provenance tags.
     """
 
     def search_fn(query: str) -> str:
-        # ---- Perform query exactly like qa.py ----
-        if EMBEDDING_MODEL in {"multilingual-e5-large", "text-embedding-3-small"}:
-            q_embed = get_embedding(text=query, model=EMBEDDING_MODEL)
-            response = index.query(
-                vector=q_embed,
-                top_k=20,                    # mirror /ask
-                include_metadata=True,
+        # Use hybrid search with re-ranking
+        # Run the async function in a sync context
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+        reranked_results = loop.run_until_complete(
+            hybrid_search_engine.hybrid_search_with_rerank(
+                query=query,
                 namespace=namespace,
+                top_k=MAX_MATCHES_TO_RETURN,
+                retrieval_k=RETRIEVAL_K,
+                alpha=HYBRID_SEARCH_ALPHA
             )
-            results = response.to_dict() if hasattr(response, "to_dict") else response
+        )
 
-        else:
-            # Pinecone-managed embeddings (default or llama-text-embed-v2)
-            query_body = {"top_k": 20, "inputs": {"text": query}}
-            if EMBEDDING_MODEL == "llama-text-embed-v2":
-                query_body["model"] = "llama-text-embed-v2"
-
-            response = index.search(
-                namespace=namespace,
-                query=query_body,
-            )
-            results = response.to_dict() if hasattr(response, "to_dict") else response
-
-        matches = (results or {}).get("matches") or []
-        if not matches:
+        if not reranked_results:
             return "No results."
-
-        # Attach `metadata.score` (RAG does this so downstream code can read a stable field)
-        for m in matches:
-            md = m.setdefault("metadata", {})
-            if "score" not in md:
-                md["score"] = m.get("score")
-
-        # --- Apply the same threshold logic as RAG ---
-        def _filter(th: float):
-            return [m for m in matches if (m.get("score") or 0) >= th]
-
-        filtered = _filter(PRIMARY_SIMILARITY_THRESHOLD)
-        if not filtered:
-            filtered = _filter(FALLBACK_SIMILARITY_THRESHOLD)
-        if not filtered:
-            filtered = matches[:MAX_MATCHES_TO_RETURN]
-
-        # Sort & trim
-        filtered.sort(key=lambda m: m.get("score", 0), reverse=True)
-        filtered = filtered[:MAX_MATCHES_TO_RETURN]
 
         # Format provenance-tagged snippets
         lines: List[str] = []
-        for m in filtered:
-            md = m.get("metadata") or {}
+        for result in reranked_results:
+            md = result.get("metadata") or {}
             text = clean_text(md.get("text") or "")
             if not text or len(text) < 50:
                 continue
             source = md.get("source") or md.get("file_name") or "unknown"
-            section = md.get("section_index")
-            score = md.get("score") or 0.0
+            section = md.get("section_index") or md.get("chunk_id")
+            score = result.get("rerank_score", 0.0)
             prov = f"{source}::section-{section}" if section is not None else source
 
             # Trim to ~1000 chars on sentence boundaries
@@ -110,14 +82,14 @@ def _pinecone_search_tool(namespace: str = "default") -> Tool:
                     buf += s + " "
                 text = buf.strip()
 
-            lines.append(f"[{prov}] (similarity: {score:.2f}) {text}")
+            lines.append(f"[{prov}] (rerank_score: {score:.3f}) {text}")
 
         return "\n\n".join(lines) if lines else "No meaningful text chunks found."
 
     return Tool(
         name="semantic_search",
         func=search_fn,
-        description="Search the indexed knowledge base and return up to 3 evidence snippets with provenance like [source::section-X] …",
+        description="Search the indexed knowledge base using hybrid search (BM25 + embeddings) with cross-encoder re-ranking. Returns up to 3 evidence snippets with provenance like [source::section-X] …",
     )
 
 
