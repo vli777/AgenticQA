@@ -30,6 +30,21 @@ def _compute_embedding(text: str, model: str) -> List[float]:
     raise ValueError(f"get_embedding(): unsupported model_name={model!r}")
 
 
+def _get_cached_embedding(text: str, model: str):
+    from cache import embedding_cache
+
+    try:
+        running_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        running_loop = None
+
+    if running_loop and running_loop.is_running():
+        # Cannot run asyncio.run inside active loop; skip caching for this call
+        return None
+
+    return asyncio.run(embedding_cache.get_embedding(text, model, _compute_embedding))
+
+
 def get_embedding(text: str, model: str = None) -> List[float]:
     """
     Returns a list-of-floats embedding for `text` using:
@@ -42,22 +57,10 @@ def get_embedding(text: str, model: str = None) -> List[float]:
 
     if ENABLE_CACHING:
         try:
-            from cache import embedding_cache
-
-            try:
-                running_loop = asyncio.get_running_loop()
-            except RuntimeError:
-                running_loop = None
-
-            if running_loop and running_loop.is_running():
-                raise RuntimeError("Embedding cache unavailable inside running event loop")
-
-            result = asyncio.run(
-                embedding_cache.get_embedding(text, model, _compute_embedding)
-            )
-            return result
+            cached = _get_cached_embedding(text, model)
+            if cached is not None:
+                return cached
         except Exception as e:
-            # Fall back to non-cached if cache fails
             from logger import logger
 
             logger.warning(f"Cache lookup failed, computing embedding: {e}")
