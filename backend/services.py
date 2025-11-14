@@ -185,4 +185,12 @@ def upsert_doc(
             upserted_count if upserted_count is not None else len(batch),
         )
 
+    # Clear BM25 cache for this namespace since we added new documents
+    try:
+        from hybrid_search import hybrid_search_engine
+        hybrid_search_engine.clear_cache(namespace)
+        logger.info(f"Cleared BM25 cache for namespace '{namespace}' after document upsert")
+    except Exception as e:
+        logger.warning(f"Failed to clear BM25 cache: {str(e)}")
+
     return {"chunks": len(vectors), "upserted": upserted_total}
