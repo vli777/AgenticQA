@@ -1,15 +1,16 @@
 # backend/hybrid_search.py
 
 import numpy as np
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, Set
 from rank_bm25 import BM25Okapi
 from sentence_transformers import CrossEncoder
 import re
 
 from logger import logger
 from pinecone_client import index
-from config import EMBEDDING_MODEL, CROSS_ENCODER_MODEL
+from config import EMBEDDING_MODEL, CROSS_ENCODER_MODEL, SEMANTIC_TAG_BOOST
 from utils import get_embedding
+from semantic_tags import infer_query_tags
 
 
 class HybridSearchEngine:
@@ -102,6 +103,44 @@ class HybridSearchEngine:
         except Exception as e:
             logger.error(f"Error fetching documents for BM25: {str(e)}")
             return []
+
+    def _fetch_tagged_documents(
+        self,
+        namespace: str,
+        tags: Optional[Set[str]],
+        limit: int = 10
+    ) -> List[Dict[str, Any]]:
+        """Fetch additional documents that share inferred semantic tags."""
+        if not tags:
+            return []
+
+        if EMBEDDING_MODEL == "multilingual-e5-large":
+            dimension = 1024
+        else:
+            dimension = 1536
+
+        try:
+            response = index.query(
+                vector=[0.0] * dimension,
+                top_k=limit,
+                include_metadata=True,
+                namespace=namespace,
+                filter={"semantic_tags": {"$in": list(tags)}},
+            )
+        except Exception as exc:
+            logger.warning("Failed to fetch semantic-tagged documents: %s", exc)
+            return []
+
+        docs: List[Dict[str, Any]] = []
+        for match in response.get("matches", []):
+            docs.append({
+                "id": match.get("id"),
+                "score": match.get("score", 0.0),
+                "metadata": match.get("metadata", {}),
+            })
+        if docs:
+            logger.info("Fetched %s additional candidates via semantic tags %s", len(docs), tags)
+        return docs
 
     def _get_or_build_bm25(self, namespace: str = "default") -> Tuple[BM25Okapi, List[Dict[str, Any]]]:
         """
@@ -253,7 +292,8 @@ class HybridSearchEngine:
         self,
         query: str,
         namespace: str = "default",
-        top_k: int = 20
+        top_k: int = 20,
+        query_tags: Optional[Set[str]] = None
     ) -> List[Dict[str, Any]]:
         """
         Perform vector similarity search using Pinecone.
@@ -293,6 +333,15 @@ class HybridSearchEngine:
                 "metadata": match.get("metadata", {})
             })
 
+        # If the user query implies semantic tags, fetch extra candidates that
+        # share those tags (even if they don't rank highly by pure similarity).
+        tagged_additions = self._fetch_tagged_documents(namespace, query_tags)
+        if tagged_additions:
+            existing_ids = {r["id"] for r in results}
+            for doc in tagged_additions:
+                if doc["id"] not in existing_ids:
+                    results.append(doc)
+
         return results
 
     def _normalize_scores(self, scores: List[float]) -> List[float]:
@@ -311,7 +360,8 @@ class HybridSearchEngine:
     def _combine_results(
         self,
         bm25_results: List[Dict[str, Any]],
-        vector_results: List[Dict[str, Any]]
+        vector_results: List[Dict[str, Any]],
+        query_tags: Optional[Set[str]] = None
     ) -> List[Dict[str, Any]]:
         """
         Combine BM25 and vector search results with deduplication.
@@ -344,11 +394,20 @@ class HybridSearchEngine:
         results = []
         for doc_id in all_ids:
             doc = id_to_doc[doc_id]
+            metadata = doc.get("metadata", {})
+            metadata_tags = {
+                str(tag).lower()
+                for tag in metadata.get("semantic_tags", []) if tag
+            }
+            tag_match = bool(query_tags and metadata_tags and (metadata_tags & query_tags))
+            boosted_vector_score = vector_scores.get(doc_id, 0.0) + (SEMANTIC_TAG_BOOST if tag_match else 0.0)
+
+            metadata["semantic_tag_match"] = tag_match
             results.append({
                 "id": doc_id,
-                "metadata": doc["metadata"],
+                "metadata": metadata,
                 "bm25_score": bm25_scores.get(doc_id, 0.0),
-                "vector_score": vector_scores.get(doc_id, 0.0),
+                "vector_score": boosted_vector_score,
                 "in_bm25": doc_id in bm25_scores,
                 "in_vector": doc_id in vector_scores
             })
@@ -384,16 +443,20 @@ class HybridSearchEngine:
         """
         logger.info(f"Performing hybrid search for query: '{query}' (BM25 k={bm25_k}, Vector k={vector_k})")
 
+        query_tags = infer_query_tags(query)
+        if query_tags:
+            logger.info(f"Detected semantic tags for '{query}': {sorted(query_tags)}")
+
         # Step 1: BM25 top-k (with section boosting enabled by default)
         bm25_results = await self.bm25_search(query, namespace, bm25_k, apply_boosting=True)
 
-        # Step 2: Vector top-k
-        vector_results = await self.vector_search(query, namespace, vector_k)
+        # Step 2: Vector top-k (with semantic tag augmentations)
+        vector_results = await self.vector_search(query, namespace, vector_k, query_tags=query_tags)
 
         logger.info(f"BM25 found {len(bm25_results)} results, Vector found {len(vector_results)} results")
 
         # Step 3: Merge + dedupe
-        combined_results = self._combine_results(bm25_results, vector_results)
+        combined_results = self._combine_results(bm25_results, vector_results, query_tags=query_tags)
 
         # Return ALL merged results (re-ranker will handle sorting)
         return combined_results
