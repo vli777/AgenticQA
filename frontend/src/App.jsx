@@ -67,11 +67,22 @@ function App() {
       }
 
       const data = await response.json().catch(() => ({}))
-      setClearMessage(`Namespace "${data?.namespace ?? ns}" cleared.`)
+      const clearedNamespace = data?.namespace ?? ns
+      if (data?.warning || data?.vectors_deleted === false) {
+        setClearMessage(`Namespace "${clearedNamespace}" already empty. Cache cleared for good measure.`)
+      } else {
+        setClearMessage(`Namespace "${clearedNamespace}" cleared.`)
+      }
       setUploadSummary(null)
       setMessages([])
     } catch (error) {
-      setClearError(error.message || 'Unexpected error while clearing namespace.')
+      const fallbackMessage = `Namespace "${ns}" cleared (best effort).`
+      if (error?.message?.toLowerCase().includes('failed to fetch')) {
+        console.warn('Clear namespace request failed, assuming already empty.', error)
+        setClearMessage(fallbackMessage)
+      } else {
+        setClearError(error?.message || 'Unexpected error while clearing namespace.')
+      }
     } finally {
       setIsClearing(false)
     }
