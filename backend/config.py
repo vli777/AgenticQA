@@ -78,32 +78,27 @@ SEMANTIC_TAG_THRESHOLD = float(os.getenv("SEMANTIC_TAG_THRESHOLD", "0.6"))
 SEMANTIC_TAG_BOOST = float(os.getenv("SEMANTIC_TAG_BOOST", "0.2"))
 
 # Hybrid search configuration (Best Practice Pipeline)
-# Number of BM25 candidates to retrieve (recommended: 30)
-BM25_K = int(os.getenv("BM25_K", "30"))
-
-# Number of vector candidates to retrieve (recommended: 30)
-VECTOR_K = int(os.getenv("VECTOR_K", "30"))
+# Keep these internal to avoid accidental overrides
+BM25_K = 30
+VECTOR_K = 30
 
 # CROSS_ENCODER_MODEL: Model to use for re-ranking
-CROSS_ENCODER_MODEL = os.getenv("CROSS_ENCODER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
+CROSS_ENCODER_MODEL = os.getenv("CROSS_ENCODER_MODEL", "cross-encoder/stsb-roberta-base")
 
-# Optimization features
-# Enable caching for embeddings, LLM responses, and search results
-ENABLE_CACHING = os.getenv("ENABLE_CACHING", "true").lower() == "true"
+# Optimization features (internal defaults)
+ENABLE_CACHING = True
+ENABLE_STREAMING = True
 
-# Enable token streaming for LLM responses
-ENABLE_STREAMING = os.getenv("ENABLE_STREAMING", "true").lower() == "true"
+# Cache configuration (internal defaults)
+EMBEDDING_CACHE_SIZE = 10000
+EMBEDDING_CACHE_TTL = 7200  # 2 hours
 
-# Cache configuration
-EMBEDDING_CACHE_SIZE = int(os.getenv("EMBEDDING_CACHE_SIZE", "10000"))
-EMBEDDING_CACHE_TTL = int(os.getenv("EMBEDDING_CACHE_TTL", "7200"))  # 2 hours
+SEARCH_CACHE_SIZE = 1000
+SEARCH_CACHE_TTL = 1800  # 30 minutes
 
-SEARCH_CACHE_SIZE = int(os.getenv("SEARCH_CACHE_SIZE", "1000"))
-SEARCH_CACHE_TTL = int(os.getenv("SEARCH_CACHE_TTL", "1800"))  # 30 minutes
-
-LLM_CACHE_SIZE = int(os.getenv("LLM_CACHE_SIZE", "500"))
-LLM_CACHE_TTL = int(os.getenv("LLM_CACHE_TTL", "3600"))  # 1 hour
+LLM_CACHE_SIZE = 500
+LLM_CACHE_TTL = 3600  # 1 hour
 
 # Chunking configuration (for better context preservation)
-CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "800"))  # Characters per chunk
-CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "300"))  # Overlap between chunks (~37%)
+CHUNK_SIZE = 2000  # Characters per chunk (~500 tokens)
+CHUNK_OVERLAP = 400  # ~20% overlap to preserve context
