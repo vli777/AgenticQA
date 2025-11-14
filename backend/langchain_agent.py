@@ -2,7 +2,6 @@
 
 import re
 import json
-import asyncio
 from typing import List, Any, Dict, TypedDict, Optional
 
 from langchain.tools import Tool
@@ -108,9 +107,10 @@ def _extract_sources(obs: str, limit: int = 5) -> List[str]:
 
 def get_agent(namespace: str = "default", tools: list = None):
     """
-    Deterministic agentic controller:
-      1) Run Pinecone search (same logic as RAG) for the original query and a rephrase
-      2) Synthesize one final answer with the LLM (no ReAct loop to get 'stuck')
+    Deterministic agentic controller that:
+      1) Uses the LLM to expand the user query into multiple focused search variations
+      2) Runs the Pinecone hybrid search tool for each variation and aggregates evidence
+      3) Synthesizes a single final answer with provenance
     Returns: {"answer": str, "reasoning": [str], "sources": [str]}
     """
     # Reuse our Pinecone-backed tool (mirrors RAG query behavior & thresholds)
@@ -127,6 +127,52 @@ def get_agent(namespace: str = "default", tools: list = None):
         raise RuntimeError("semantic_search tool not found")
 
     llm = ChatNVIDIA(model="meta/llama-4-maverick-17b-128e-instruct", temperature=0.0)
+
+    def _plan_search_queries(question: str, max_variations: int = 4) -> List[str]:
+        """
+        Ask the LLM to propose related keyword variations so search can cover synonyms/concepts.
+        Returns the original query plus up to (max_variations-1) alternates.
+        """
+        prompt = (
+            "You are a query planner for document search. Given a user's question, list concise keyword\n"
+            "variations that capture different angles (synonyms, related terminology, abbreviations).\n"
+            "Return STRICT JSON such as {\"queries\": [\"variation 1\", \"variation 2\"]}. "
+            "Keep each variation under 20 words and prioritize distinct wording.\n\n"
+            f"Question: {question}"
+        )
+
+        planned_variations: List[str] = []
+        try:
+            response = llm.invoke(prompt)
+            raw = (response.content or "").strip()
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                planned_variations = parsed.get("queries") or []
+            elif isinstance(parsed, list):
+                planned_variations = parsed
+        except Exception:
+            # Fall back to a simple heuristic rephrase if parsing fails
+            q2 = re.sub(r"\b(knows?|know|knowledge of)\b", "skills with", question, flags=re.I)
+            if q2 != question:
+                planned_variations = [q2]
+            else:
+                planned_variations = [f"{question} skills resume profile"]
+
+        deduped: List[str] = []
+        seen = set()
+        for candidate in [question] + planned_variations:
+            cleaned = " ".join((candidate or "").split())
+            if not cleaned:
+                continue
+            lowered = cleaned.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            deduped.append(cleaned)
+            if len(deduped) >= max_variations:
+                break
+
+        return deduped or [question]
 
     def _compose_answer(question: str, evidence: str) -> str:
         """Single-shot composition; no loops, no scratchpad."""
@@ -170,39 +216,22 @@ def get_agent(namespace: str = "default", tools: list = None):
                 "sources": [],
             }
 
-        # Phase 1: search (original + simple rephrase)
+        # Phase 1: multi-query search using LLM-generated variations
         reasoning: List[str] = []
         observations: List[str] = []
 
-        q1 = question
-        q2 = re.sub(r"\b(knows?|know|knowledge of)\b", "skills with", question, flags=re.I)
-        q2 = q2 if q2 != q1 else f"{question} skills resume profile"
-
-        obs1 = search_tool(q1)
-        observations.append(obs1)
-        reasoning.append(f'Used semantic_search with: {q1}')
-
-        # If first search is thin, try the rephrase
-        if (not obs1) or ("No results" in obs1) or (obs1.strip().count("\n[") + obs1.strip().startswith("[") * 1) < 1:
-            obs2 = search_tool(q2)
-            observations.append(obs2)
-            reasoning.append(f'Used semantic_search with: {q2}')
+        planned_queries = _plan_search_queries(question, max_variations=4)
+        for query in planned_queries:
+            obs = search_tool(query)
+            observations.append(obs)
+            reasoning.append(f"Used semantic_search with: {query}")
 
         # Merge evidence (prefer the first search’s top lines)
-        evidence_blocks = [o for o in observations if isinstance(o, str) and o.strip()]
-        merged_evidence = "\n\n".join(evidence_blocks[:2])
-
-        # Collect sources from bracketed lines
-        def _extract_sources(text: str, limit: int = 5) -> List[str]:
-            out, seen = [], set()
-            for ln in (text or "").splitlines():
-                s = ln.strip()
-                if s.startswith("[") and s not in seen:
-                    out.append(s)
-                    seen.add(s)
-                if len(out) >= limit:
-                    break
-            return out
+        evidence_blocks = []
+        for obs in observations:
+            if isinstance(obs, str) and obs.strip() and obs.strip().lower() not in {"no results.", "no meaningful text chunks found."}:
+                evidence_blocks.append(obs.strip())
+        merged_evidence = "\n\n".join(evidence_blocks[:3])
 
         sources = _extract_sources(merged_evidence, limit=5)
 
