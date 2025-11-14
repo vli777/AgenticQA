@@ -5,9 +5,9 @@ import re
 from typing import List, Dict, Any, Optional
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 
-from utils import get_embedding  
-from pinecone_client import index 
-from config import EMBEDDING_MODEL
+from utils import get_embedding
+from pinecone_client import index
+from config import EMBEDDING_MODEL, CHUNK_SIZE, CHUNK_OVERLAP
 from logger import logger
 
 def clean_text(text: str) -> str:
@@ -47,8 +47,23 @@ def is_meaningful_chunk(text: str) -> bool:
         
     return True
 
-def chunk_text(text: str, chunk_size: int = 2000, chunk_overlap: int = 400) -> List[str]:
-    """Split text into meaningful chunks."""
+def chunk_text(text: str, chunk_size: int = None, chunk_overlap: int = None) -> List[str]:
+    """
+    Split text into meaningful chunks with overlap for better context.
+
+    Args:
+        chunk_size: Characters per chunk (default from config: 800)
+        chunk_overlap: Overlap between chunks (default from config: 300, ~37%)
+
+    Best practices:
+    - Smaller chunks (512-1024 chars) work better for retrieval
+    - Higher overlap (30-40%) preserves context across boundaries
+    - Current defaults: 800 chars, 300 overlap (37.5%)
+    """
+    chunk_size = chunk_size or CHUNK_SIZE
+    chunk_overlap = chunk_overlap or CHUNK_OVERLAP
+
+    logger.info(f"Chunking with size={chunk_size}, overlap={chunk_overlap} ({chunk_overlap/chunk_size*100:.1f}%)")
     # First split by double newlines to preserve document structure
     sections = re.split(r'\n\s*\n', text)
     
