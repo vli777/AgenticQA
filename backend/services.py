@@ -3,110 +3,110 @@
 import numpy as np
 import re
 from typing import List, Dict, Any, Optional
-from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 from utils import get_embedding
 from pinecone_client import index
 from config import EMBEDDING_MODEL, CHUNK_SIZE, CHUNK_OVERLAP
 from logger import logger
+from semantic_tags import extract_semantic_tags
 
 def clean_text(text: str) -> str:
-    """Clean and normalize text."""
-    # Remove extra whitespace
+    """Clean and normalize text while keeping symbols like +/# for skills."""
     text = re.sub(r'\s+', ' ', text)
-    # Remove special characters but keep punctuation
-    text = re.sub(r'[^\w\s.,!?-]', '', text)
+    text = re.sub(r'[^\w\s.,!?+#/-]', '', text)
     return text.strip()
 
 def is_meaningful_chunk(text: str) -> bool:
     """Check if a chunk contains meaningful content."""
     text = text.strip()
-    if len(text) < 50:
+    if not text:
         return False
 
     if re.match(r'^[\d\s.,]+$', text):
         return False
     if re.match(r'^[A-Z][a-z]+\s+[A-Z][a-z]+(\s+[A-Z][a-z]+)*$', text):
         return False
-
     if re.match(r'^.*\d{4}\.?\s+URL\s+https?://.*$', text):
         return False
     if re.match(r'^.*arXiv:?\d{4}\.\d{4,5}.*$', text):
         return False
-
     if re.match(r'^\d+$', text):
         return False
 
-    # Allow bullet lists that may lack sentence punctuation
+    # Allow short bullet lists / skill inventories without punctuation
     if not re.search(r'[.!?]', text):
-        tokens = re.findall(r'\b\w+\b', text)
+        tokens = re.findall(r'\b[\w+#]+\b', text)
         unique_terms = len(set(t.lower() for t in tokens))
-        if unique_terms < 5:
+        capitalized_terms = len([t for t in tokens if t and t[0].isupper()])
+        if unique_terms == 0 and capitalized_terms == 0:
             return False
 
     return True
 
 def chunk_text(text: str, chunk_size: int = None, chunk_overlap: int = None) -> List[str]:
     """
-    Split text into meaningful chunks with overlap for better context.
+    Split text into sentence-aligned chunks with overlap.
 
     Args:
         chunk_size: Characters per chunk (default from config: 800)
         chunk_overlap: Overlap between chunks (default from config: 300, ~37%)
-
-    Best practices:
-    - Smaller chunks (512-1024 chars) work better for retrieval
-    - Higher overlap (30-40%) preserves context across boundaries
-    - Current defaults: 800 chars, 300 overlap (37.5%)
     """
     chunk_size = chunk_size or CHUNK_SIZE
     chunk_overlap = chunk_overlap or CHUNK_OVERLAP
 
-    logger.info(f"Chunking with size={chunk_size}, overlap={chunk_overlap} ({chunk_overlap/chunk_size*100:.1f}%)")
-    # First split by double newlines to preserve document structure
-    sections = re.split(r'\n\s*\n', text)
-    
-    meaningful_chunks = []
-    current_chunk = ""
-    
-    for section in sections:
-        # Clean the section
+    logger.info(
+        "Chunking with size=%s, overlap=%s (%.1f%%)",
+        chunk_size,
+        chunk_overlap,
+        chunk_overlap / chunk_size * 100,
+    )
+
+    raw_sections = re.split(r'\n\s*\n', text)
+    sentences: List[str] = []
+    for section in raw_sections:
         section = clean_text(section)
         if not section:
             continue
-            
-        # If section is meaningful on its own, keep it as a chunk
-        if is_meaningful_chunk(section):
-            if len(current_chunk) + len(section) <= chunk_size:
-                current_chunk += " " + section
-            else:
-                if current_chunk:
-                    meaningful_chunks.append(current_chunk.strip())
-                current_chunk = section
-            continue
-            
-        # Otherwise, split the section into smaller chunks
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap,
-            length_function=len,
-            separators=["\n", ".", "!", "?", ",", " ", ""]
-        )
-        
-        chunks = text_splitter.split_text(section)
-        for chunk in chunks:
-            if is_meaningful_chunk(chunk):
-                if len(current_chunk) + len(chunk) <= chunk_size:
-                    current_chunk += " " + chunk
-                else:
-                    if current_chunk:
-                        meaningful_chunks.append(current_chunk.strip())
-                    current_chunk = chunk
-    
-    if current_chunk:
-        meaningful_chunks.append(current_chunk.strip())
-    
-    return meaningful_chunks
+        # Split into sentences but keep bullet-like fragments
+        parts = re.split(r'(?<=[.!?])\s+|•\s+', section)
+        for part in parts:
+            part = part.strip()
+            if part:
+                sentences.append(part)
+
+    chunks: List[str] = []
+    current_sentences: List[str] = []
+    current_len = 0
+
+    for sentence in sentences:
+        sentence_len = len(sentence) + 1  # account for space
+        if current_len + sentence_len > chunk_size and current_sentences:
+            chunk_text_value = " ".join(current_sentences).strip()
+            if is_meaningful_chunk(chunk_text_value):
+                chunks.append(chunk_text_value)
+
+            # Build overlap from the tail sentences
+            overlap_sentences: List[str] = []
+            overlap_len = 0
+            for prev_sentence in reversed(current_sentences):
+                prev_len = len(prev_sentence) + 1
+                if overlap_len + prev_len > chunk_overlap:
+                    break
+                overlap_sentences.insert(0, prev_sentence)
+                overlap_len += prev_len
+
+            current_sentences = overlap_sentences.copy()
+            current_len = overlap_len
+
+        current_sentences.append(sentence)
+        current_len += sentence_len
+
+    if current_sentences:
+        chunk_text_value = " ".join(current_sentences).strip()
+        if is_meaningful_chunk(chunk_text_value):
+            chunks.append(chunk_text_value)
+
+    return chunks
 
 def upsert_doc(
     doc_text: str,
@@ -155,6 +155,10 @@ def upsert_doc(
 
         if metadata_extra:
             metadata.update(metadata_extra)
+
+        tags = extract_semantic_tags(chunk)
+        if tags:
+            metadata["semantic_tags"] = tags
         
         vectors.append({
             "id": chunk_id,
@@ -198,13 +202,5 @@ def upsert_doc(
             len(batch),
             upserted_count if upserted_count is not None else len(batch),
         )
-
-    # Clear BM25 cache for this namespace since we added new documents
-    try:
-        from hybrid_search import hybrid_search_engine
-        hybrid_search_engine.clear_cache(namespace)
-        logger.info(f"Cleared BM25 cache for namespace '{namespace}' after document upsert")
-    except Exception as e:
-        logger.warning(f"Failed to clear BM25 cache: {str(e)}")
 
     return {"chunks": len(vectors), "upserted": upserted_total}
