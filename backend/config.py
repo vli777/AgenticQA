@@ -37,3 +37,13 @@ if _raw in _SUPPORTED:
     EMBEDDING_MODEL = _raw
 else:
     EMBEDDING_MODEL = None
+
+# Hybrid search configuration
+# HYBRID_SEARCH_ALPHA: Weight for BM25 vs vector search (0.0 = vector only, 1.0 = BM25 only, 0.5 = equal)
+HYBRID_SEARCH_ALPHA = float(os.getenv("HYBRID_SEARCH_ALPHA", "0.5"))
+
+# CROSS_ENCODER_MODEL: Model to use for re-ranking
+CROSS_ENCODER_MODEL = os.getenv("CROSS_ENCODER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
+
+# Number of results to retrieve before re-ranking
+RETRIEVAL_K = int(os.getenv("RETRIEVAL_K", "20"))
