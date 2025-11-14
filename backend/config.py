@@ -18,6 +18,18 @@ if _cors_origins_raw:
 else:
     CORS_ORIGINS = ["*"]
 
+# Ensure local dev servers can hit the API even when custom origins are provided
+_LOCAL_DEV_ORIGINS = {
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+}
+if "*" not in CORS_ORIGINS:
+    for origin in _LOCAL_DEV_ORIGINS:
+        if origin not in CORS_ORIGINS:
+            CORS_ORIGINS.append(origin)
+
 # Read the full model name from the environment, e.g.:
 #   EMBEDDING_MODEL="multilingual-e5-large"  or  "text-embedding-3-small"
 _raw = os.getenv("EMBEDDING_MODEL", "").strip()
