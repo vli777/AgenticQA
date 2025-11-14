@@ -408,3 +408,47 @@ class HybridSearchEngine:
 
 # Global instance
 hybrid_search_engine = HybridSearchEngine()
+
+
+def hybrid_search_sync(
+    query: str,
+    namespace: str = "default",
+    top_k: int = 3,
+    retrieval_k: int = 20,
+    alpha: float = 0.5
+) -> List[Dict[str, Any]]:
+    """
+    Synchronous wrapper for hybrid_search_with_rerank.
+
+    This function handles async/sync context switching to work correctly
+    in both synchronous (LangChain tools) and asynchronous (FastAPI) contexts.
+
+    Args:
+        query: Search query
+        namespace: Pinecone namespace
+        top_k: Final number of results to return after re-ranking
+        retrieval_k: Number of results to retrieve before re-ranking
+        alpha: Weight for BM25 in hybrid search
+
+    Returns:
+        Re-ranked top-k results
+    """
+    import concurrent.futures
+
+    def run_async():
+        """Run in a new event loop"""
+        import asyncio
+        return asyncio.run(
+            hybrid_search_engine.hybrid_search_with_rerank(
+                query=query,
+                namespace=namespace,
+                top_k=top_k,
+                retrieval_k=retrieval_k,
+                alpha=alpha
+            )
+        )
+
+    # Run in a thread pool to avoid event loop conflicts
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(run_async)
+        return future.result()

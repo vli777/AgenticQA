@@ -39,21 +39,15 @@ def _pinecone_search_tool(namespace: str = "default") -> Tool:
 
     def search_fn(query: str) -> str:
         # Use hybrid search with re-ranking
-        # Run the async function in a sync context
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+        # Use sync wrapper to avoid event loop conflicts
+        from hybrid_search import hybrid_search_sync
 
-        reranked_results = loop.run_until_complete(
-            hybrid_search_engine.hybrid_search_with_rerank(
-                query=query,
-                namespace=namespace,
-                top_k=MAX_MATCHES_TO_RETURN,
-                retrieval_k=RETRIEVAL_K,
-                alpha=HYBRID_SEARCH_ALPHA
-            )
+        reranked_results = hybrid_search_sync(
+            query=query,
+            namespace=namespace,
+            top_k=MAX_MATCHES_TO_RETURN,
+            retrieval_k=RETRIEVAL_K,
+            alpha=HYBRID_SEARCH_ALPHA
         )
 
         if not reranked_results:
