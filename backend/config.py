@@ -11,6 +11,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME") or "test"
 NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY")
+HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
 
 _cors_origins_raw = os.getenv("CORS_ORIGINS")
 if _cors_origins_raw:
@@ -49,6 +50,32 @@ if _raw in _SUPPORTED:
     EMBEDDING_MODEL = _raw
 else:
     EMBEDDING_MODEL = None
+
+# Semantic tagging configuration (Hugging Face zero-shot + heuristics)
+ENABLE_SEMANTIC_TAGGING = os.getenv("ENABLE_SEMANTIC_TAGGING", "true").lower() == "true"
+HUGGINGFACE_ZS_MODEL = os.getenv("HUGGINGFACE_ZS_MODEL", "facebook/bart-large-mnli")
+
+_semantic_labels_raw = os.getenv("SEMANTIC_TAG_LABELS")
+if _semantic_labels_raw:
+    SEMANTIC_TAG_LABELS = [label.strip().lower() for label in _semantic_labels_raw.split(",") if label.strip()]
+else:
+    SEMANTIC_TAG_LABELS = [
+        "python",
+        "java",
+        "javascript",
+        "typescript",
+        "c++",
+        "c#",
+        "go",
+        "rust",
+        "sql",
+        "data engineering",
+        "machine learning",
+        "devops",
+    ]
+
+SEMANTIC_TAG_THRESHOLD = float(os.getenv("SEMANTIC_TAG_THRESHOLD", "0.6"))
+SEMANTIC_TAG_BOOST = float(os.getenv("SEMANTIC_TAG_BOOST", "0.2"))
 
 # Hybrid search configuration (Best Practice Pipeline)
 # Number of BM25 candidates to retrieve (recommended: 30)
