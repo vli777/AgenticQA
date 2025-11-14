@@ -64,3 +64,7 @@ SEARCH_CACHE_TTL = int(os.getenv("SEARCH_CACHE_TTL", "1800"))  # 30 minutes
 
 LLM_CACHE_SIZE = int(os.getenv("LLM_CACHE_SIZE", "500"))
 LLM_CACHE_TTL = int(os.getenv("LLM_CACHE_TTL", "3600"))  # 1 hour
+
+# Chunking configuration (for better context preservation)
+CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "800"))  # Characters per chunk
+CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "300"))  # Overlap between chunks (~37%)
