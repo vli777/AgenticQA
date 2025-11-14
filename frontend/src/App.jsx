@@ -23,6 +23,12 @@ function App() {
   const [isClearing, setIsClearing] = useState(false)
   const [clearMessage, setClearMessage] = useState('')
   const [clearError, setClearError] = useState('')
+  const conversationId = useMemo(() => {
+    if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+      return crypto.randomUUID()
+    }
+    return `conv-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  }, [])
 
   const fileInputRef = useRef(null)
 
@@ -134,6 +140,21 @@ function App() {
     setMessages((prev) => [...prev, message])
   }
 
+  const buildHistoryPayload = () => {
+    const sliceStart = Math.max(messages.length - 6, 0)
+    const normalizeContent = (msg) => {
+      if (msg.role === 'assistant' && msg.mode === 'rag' && Array.isArray(msg.matches) && msg.matches.length) {
+        const snippets = msg.matches.map((match) => match.text || '').filter(Boolean)
+        return [msg.content, ...snippets].join('\n')
+      }
+      return typeof msg.content === 'string' ? msg.content : String(msg.content || '')
+    }
+    return messages.slice(sliceStart).map((msg) => ({
+      role: msg.role,
+      content: normalizeContent(msg),
+    }))
+  }
+
   const handleSend = async (event) => {
     event.preventDefault()
     const question = inputValue.trim()
@@ -149,7 +170,12 @@ function App() {
       const response = await fetch(`${API_BASE_URL}${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question, namespace: sanitizedNamespace }),
+        body: JSON.stringify({
+          question,
+          namespace: sanitizedNamespace,
+          history: buildHistoryPayload(),
+          conversation_id: conversationId,
+        }),
       })
 
       if (!response.ok) {

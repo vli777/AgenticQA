@@ -170,15 +170,20 @@ def get_agent(namespace: str = "default", tools: list = None):
 
         return deduped or [question]
 
-    def _compose_answer(question: str, evidence: str) -> str:
+    def _compose_answer(question: str, evidence: str, chat_history: Optional[List[Dict[str, str]]] = None) -> str:
         """Single-shot composition; no loops, no scratchpad."""
+        history_section = ""
+        if chat_history:
+            history_lines = "\n".join(f"{item['role']}: {item['content']}" for item in chat_history)
+            history_section = f"\n\nRecent conversation:\n{history_lines}\n"
         # If we truly found nothing, answer gracefully
         if not evidence or evidence.strip().lower() in {"no results.", "no meaningful text chunks found."}:
             prompt = (
                 "Question:\n"
                 f"{question}\n\n"
                 "Evidence:\n"
-                "(none)\n\n"
+                "(none)\n"
+                f"{history_section}\n"
                 "You found no evidence in the knowledge base. Reply concisely that no information is available."
             )
             return llm.invoke(prompt).content
@@ -187,7 +192,8 @@ def get_agent(namespace: str = "default", tools: list = None):
             "You are answering based ONLY on the evidence below. "
             "If the evidence supports a clear answer, answer it directly and cite the sources in parentheses "
             "using the bracketed provenance lines.\n\n"
-            f"Question:\n{question}\n\n"
+            f"Question:\n{question}\n"
+            f"{history_section}\n"
             f"Evidence snippets (each starts with a bracketed provenance like [source::section-X]):\n{evidence}\n\n"
             "Write a concise answer in 1–2 sentences. If relevant, include the most helpful provenance lines in parentheses."
         )
@@ -195,10 +201,12 @@ def get_agent(namespace: str = "default", tools: list = None):
 
     def _invoke(inputs: Dict[str, Any] | str) -> AgentOutput:
         # Normalize input
+        history: List[Dict[str, str]] = []
         if isinstance(inputs, str):
             question = inputs
         elif isinstance(inputs, dict):
             question = inputs.get("input") or inputs.get("question")
+            history = inputs.get("chat_history") or []
             if not isinstance(question, str):
                 # Fallback: first string value
                 question = next((v for v in inputs.values() if isinstance(v, str)), "")
@@ -232,7 +240,10 @@ def get_agent(namespace: str = "default", tools: list = None):
         sources = _extract_sources(merged_evidence, limit=5)
 
         # Phase 2: compose final answer (single LLM call)
-        final_answer = _compose_answer(question, merged_evidence)
+        final_answer = _compose_answer(question, merged_evidence, history)
+
+        if history:
+            reasoning.append("Considered recent conversation context when forming query and answer.")
 
         return {
             "answer": final_answer or "I couldn't find a definitive answer.",
