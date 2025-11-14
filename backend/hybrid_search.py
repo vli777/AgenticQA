@@ -8,7 +8,7 @@ import re
 
 from logger import logger
 from pinecone_client import index
-from config import EMBEDDING_MODEL, CROSS_ENCODER_MODEL, BM25_BOOST_SECTIONS
+from config import EMBEDDING_MODEL, CROSS_ENCODER_MODEL
 from utils import get_embedding
 
 
@@ -384,8 +384,8 @@ class HybridSearchEngine:
         """
         logger.info(f"Performing hybrid search for query: '{query}' (BM25 k={bm25_k}, Vector k={vector_k})")
 
-        # Step 1: BM25 top-k (with section boosting)
-        bm25_results = await self.bm25_search(query, namespace, bm25_k, apply_boosting=BM25_BOOST_SECTIONS)
+        # Step 1: BM25 top-k (with section boosting enabled by default)
+        bm25_results = await self.bm25_search(query, namespace, bm25_k, apply_boosting=True)
 
         # Step 2: Vector top-k
         vector_results = await self.vector_search(query, namespace, vector_k)
