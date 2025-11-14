@@ -9,7 +9,7 @@ from langchain_nvidia_ai_endpoints import ChatNVIDIA
 
 from logger import logger
 from config import (
-    EMBEDDING_MODEL, OPENAI_API_KEY, HYBRID_SEARCH_ALPHA, RETRIEVAL_K,
+    EMBEDDING_MODEL, OPENAI_API_KEY, BM25_K, VECTOR_K,
     ENABLE_CACHING, ENABLE_STREAMING
 )
 from models import AskRequest
@@ -89,23 +89,25 @@ async def ask(req: AskRequest):
             query=req.question,
             namespace=req.namespace,
             top_k=MAX_MATCHES_TO_RETURN,
-            alpha=HYBRID_SEARCH_ALPHA,
-            retrieval_k=RETRIEVAL_K
+            bm25_k=BM25_K,
+            vector_k=VECTOR_K
         )
         if cached is not None:
             logger.info("Returning cached search results")
             return {"results": {"matches": cached}, "cached": True}
 
-    # Use hybrid search with re-ranking
-    # retrieval_k from config (default 20) means we get results from hybrid search before re-ranking
-    # top_k=MAX_MATCHES_TO_RETURN (3) is the final number after re-ranking
-    # alpha from config (default 0.5) controls weight for BM25 vs vector search
+    # CORRECT HYBRID RAG PIPELINE:
+    # 1. BM25 top-30 (lexical)
+    # 2. Vector top-30 (semantic)
+    # 3. Merge + dedupe (up to 60)
+    # 4. Cross-encoder re-rank ALL
+    # 5. Return top-3
     reranked_results = await hybrid_search_engine.hybrid_search_with_rerank(
         query=req.question,
         namespace=req.namespace,
         top_k=MAX_MATCHES_TO_RETURN,
-        retrieval_k=RETRIEVAL_K,
-        alpha=HYBRID_SEARCH_ALPHA
+        bm25_k=BM25_K,
+        vector_k=VECTOR_K
     )
 
     # Convert to the expected format
@@ -140,8 +142,8 @@ async def ask(req: AskRequest):
             namespace=req.namespace,
             top_k=MAX_MATCHES_TO_RETURN,
             results=matches,
-            alpha=HYBRID_SEARCH_ALPHA,
-            retrieval_k=RETRIEVAL_K
+            bm25_k=BM25_K,
+            vector_k=VECTOR_K
         )
 
     logger.info(f"Hybrid search returned {len(matches)} re-ranked results")
@@ -201,8 +203,8 @@ async def ask_stream(req: AskRequest):
                 query=req.question,
                 namespace=req.namespace,
                 top_k=MAX_MATCHES_TO_RETURN,
-                retrieval_k=RETRIEVAL_K,
-                alpha=HYBRID_SEARCH_ALPHA
+                bm25_k=BM25_K,
+                vector_k=VECTOR_K
             )
 
             if not reranked_results:
