@@ -47,3 +47,20 @@ CROSS_ENCODER_MODEL = os.getenv("CROSS_ENCODER_MODEL", "cross-encoder/ms-marco-M
 
 # Number of results to retrieve before re-ranking
 RETRIEVAL_K = int(os.getenv("RETRIEVAL_K", "20"))
+
+# Optimization features
+# Enable caching for embeddings, LLM responses, and search results
+ENABLE_CACHING = os.getenv("ENABLE_CACHING", "true").lower() == "true"
+
+# Enable token streaming for LLM responses
+ENABLE_STREAMING = os.getenv("ENABLE_STREAMING", "true").lower() == "true"
+
+# Cache configuration
+EMBEDDING_CACHE_SIZE = int(os.getenv("EMBEDDING_CACHE_SIZE", "10000"))
+EMBEDDING_CACHE_TTL = int(os.getenv("EMBEDDING_CACHE_TTL", "7200"))  # 2 hours
+
+SEARCH_CACHE_SIZE = int(os.getenv("SEARCH_CACHE_SIZE", "1000"))
+SEARCH_CACHE_TTL = int(os.getenv("SEARCH_CACHE_TTL", "1800"))  # 30 minutes
+
+LLM_CACHE_SIZE = int(os.getenv("LLM_CACHE_SIZE", "500"))
+LLM_CACHE_TTL = int(os.getenv("LLM_CACHE_TTL", "3600"))  # 1 hour
