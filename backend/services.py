@@ -20,31 +20,30 @@ def clean_text(text: str) -> str:
 
 def is_meaningful_chunk(text: str) -> bool:
     """Check if a chunk contains meaningful content."""
-    # Remove whitespace and check length
     text = text.strip()
-    if len(text) < 50:  # Too short to be meaningful
+    if len(text) < 50:
         return False
-        
-    # Check if it's just a list of names or numbers
-    if re.match(r'^[\d\s.,]+$', text):  # Just numbers
+
+    if re.match(r'^[\d\s.,]+$', text):
         return False
-    if re.match(r'^[A-Z][a-z]+\s+[A-Z][a-z]+(\s+[A-Z][a-z]+)*$', text):  # Just names
+    if re.match(r'^[A-Z][a-z]+\s+[A-Z][a-z]+(\s+[A-Z][a-z]+)*$', text):
         return False
-        
-    # Check if it's just citations/references
-    if re.match(r'^.*\d{4}\.?\s+URL\s+https?://.*$', text):  # Just a URL citation
+
+    if re.match(r'^.*\d{4}\.?\s+URL\s+https?://.*$', text):
         return False
-    if re.match(r'^.*arXiv:?\d{4}\.\d{4,5}.*$', text):  # Just an arXiv citation
+    if re.match(r'^.*arXiv:?\d{4}\.\d{4,5}.*$', text):
         return False
-        
-    # Check if it contains actual sentences
-    if not re.search(r'[.!?]', text):  # No sentence endings
-        return False
-        
-    # Check if it's just a page number
+
     if re.match(r'^\d+$', text):
         return False
-        
+
+    # Allow bullet lists that may lack sentence punctuation
+    if not re.search(r'[.!?]', text):
+        tokens = re.findall(r'\b\w+\b', text)
+        unique_terms = len(set(t.lower() for t in tokens))
+        if unique_terms < 5:
+            return False
+
     return True
 
 def chunk_text(text: str, chunk_size: int = None, chunk_overlap: int = None) -> List[str]:
