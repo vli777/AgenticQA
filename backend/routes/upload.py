@@ -239,6 +239,14 @@ async def upload_documents(
             file_vectors_upserted,
         )
 
+    # Clear BM25 cache ONCE after all documents uploaded
+    try:
+        from hybrid_search import hybrid_search_engine
+        hybrid_search_engine.clear_cache(namespace)
+        logger.info(f"Cleared BM25 cache for namespace '{namespace}' after uploading {len(files)} file(s)")
+    except Exception as e:
+        logger.warning(f"Failed to clear BM25 cache: {str(e)}")
+
     logger.info(
         "Upload request complete (namespace=%s, total_chunks=%s, total_vectors=%s)",
         namespace,
