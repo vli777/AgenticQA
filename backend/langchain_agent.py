@@ -6,14 +6,10 @@ from typing import List, Any, Dict, TypedDict, Optional
 
 from langchain.tools import Tool
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
-from langchain.agents import initialize_agent, AgentType
 from langchain_core.runnables import RunnableLambda
 
-from config import EMBEDDING_MODEL, BM25_K, VECTOR_K
-from utils import get_embedding
-from pinecone_client import index
+from config import BM25_K, VECTOR_K
 from services import clean_text  # reuse the shared cleaner
-from hybrid_search import hybrid_search_engine
 
 # --- Keep thresholds aligned with qa.py ---
 PRIMARY_SIMILARITY_THRESHOLD = 0.6

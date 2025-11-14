@@ -4,9 +4,8 @@
 
 from __future__ import annotations
 
-import re
 from functools import lru_cache
-from typing import Iterable, List, Optional, Set, Tuple
+from typing import List, Optional, Set, Tuple
 
 try:
     from huggingface_hub import InferenceClient
