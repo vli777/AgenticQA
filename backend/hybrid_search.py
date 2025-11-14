@@ -8,7 +8,7 @@ import re
 
 from logger import logger
 from pinecone_client import index
-from config import EMBEDDING_MODEL, CROSS_ENCODER_MODEL
+from config import EMBEDDING_MODEL, CROSS_ENCODER_MODEL, BM25_BOOST_SECTIONS
 from utils import get_embedding
 
 
@@ -139,19 +139,70 @@ class HybridSearchEngine:
             self.bm25_cache.clear()
             logger.info("Cleared all BM25 caches")
 
+    def _boost_score(self, base_score: float, text: str, query: str) -> float:
+        """
+        Apply section-aware boosting to BM25 scores.
+
+        Boosts scores for:
+        - Important sections (Skills, Languages, Education, etc.)
+        - Exact term matches
+        - Short, focused chunks
+
+        Args:
+            base_score: Original BM25 score
+            text: Document text
+            query: Search query
+
+        Returns:
+            Boosted score
+        """
+        boost = 1.0
+        text_lower = text.lower()
+        query_lower = query.lower()
+
+        # Boost for important section headers
+        important_sections = [
+            'skills', 'languages', 'technologies', 'experience',
+            'education', 'tools', 'frameworks', 'expertise'
+        ]
+
+        for section in important_sections:
+            if section in text_lower[:100]:  # Check first 100 chars for section header
+                boost *= 2.0
+                logger.debug(f"Section boost applied: {section}")
+                break
+
+        # Boost for exact term matches (case-insensitive)
+        query_terms = query_lower.split()
+        for term in query_terms:
+            if len(term) > 2:  # Skip very short terms
+                # Count exact word matches (not substrings)
+                pattern = r'\b' + re.escape(term) + r'\b'
+                matches = len(re.findall(pattern, text_lower))
+                if matches > 0:
+                    boost *= (1.0 + 0.5 * matches)  # Boost by 50% per match
+
+        # Boost shorter, focused chunks (more signal, less noise)
+        if len(text) < 500:  # Short chunks are usually more focused
+            boost *= 1.5
+
+        return base_score * boost
+
     async def bm25_search(
         self,
         query: str,
         namespace: str = "default",
-        top_k: int = 20
+        top_k: int = 20,
+        apply_boosting: bool = True
     ) -> List[Dict[str, Any]]:
         """
-        Perform BM25 search.
+        Perform BM25 search with optional section-aware boosting.
 
         Args:
             query: Search query
             namespace: Pinecone namespace
             top_k: Number of results to return
+            apply_boosting: Apply section-aware score boosting
 
         Returns:
             List of matches with scores
@@ -166,16 +217,33 @@ class HybridSearchEngine:
         tokenized_query = self._tokenize(query)
         scores = bm25.get_scores(tokenized_query)
 
-        # Get top-k results
-        top_indices = np.argsort(scores)[::-1][:top_k]
+        # Apply boosting if enabled
+        if apply_boosting:
+            boosted_scores = []
+            for idx, base_score in enumerate(scores):
+                if base_score > 0:
+                    text = documents[idx].get("text", "")
+                    boosted = self._boost_score(base_score, text, query)
+                    boosted_scores.append((idx, boosted))
+                else:
+                    boosted_scores.append((idx, base_score))
+
+            # Sort by boosted scores
+            boosted_scores.sort(key=lambda x: x[1], reverse=True)
+            top_indices = [idx for idx, _ in boosted_scores[:top_k]]
+            top_scores = [score for _, score in boosted_scores[:top_k]]
+        else:
+            # Original behavior
+            top_indices = np.argsort(scores)[::-1][:top_k]
+            top_scores = [scores[idx] for idx in top_indices]
 
         results = []
-        for idx in top_indices:
-            if scores[idx] > 0:  # Only include results with positive scores
+        for idx, score in zip(top_indices, top_scores):
+            if score > 0:  # Only include results with positive scores
                 doc = documents[idx]
                 results.append({
                     "id": doc["id"],
-                    "score": float(scores[idx]),
+                    "score": float(score),
                     "metadata": doc["metadata"]
                 })
 
@@ -316,8 +384,8 @@ class HybridSearchEngine:
         """
         logger.info(f"Performing hybrid search for query: '{query}' (BM25 k={bm25_k}, Vector k={vector_k})")
 
-        # Step 1: BM25 top-k
-        bm25_results = await self.bm25_search(query, namespace, bm25_k)
+        # Step 1: BM25 top-k (with section boosting)
+        bm25_results = await self.bm25_search(query, namespace, bm25_k, apply_boosting=BM25_BOOST_SECTIONS)
 
         # Step 2: Vector top-k
         vector_results = await self.vector_search(query, namespace, vector_k)
