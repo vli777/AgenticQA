@@ -10,7 +10,7 @@ from langchain_nvidia_ai_endpoints import ChatNVIDIA
 from langchain.agents import initialize_agent, AgentType
 from langchain_core.runnables import RunnableLambda
 
-from config import EMBEDDING_MODEL, HYBRID_SEARCH_ALPHA, RETRIEVAL_K
+from config import EMBEDDING_MODEL, BM25_K, VECTOR_K
 from utils import get_embedding
 from pinecone_client import index
 from services import clean_text  # reuse the shared cleaner
@@ -46,8 +46,8 @@ def _pinecone_search_tool(namespace: str = "default") -> Tool:
             query=query,
             namespace=namespace,
             top_k=MAX_MATCHES_TO_RETURN,
-            retrieval_k=RETRIEVAL_K,
-            alpha=HYBRID_SEARCH_ALPHA
+            bm25_k=BM25_K,
+            vector_k=VECTOR_K
         )
 
         if not reranked_results:

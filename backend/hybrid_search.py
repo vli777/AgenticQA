@@ -243,57 +243,49 @@ class HybridSearchEngine:
     def _combine_results(
         self,
         bm25_results: List[Dict[str, Any]],
-        vector_results: List[Dict[str, Any]],
-        alpha: float = 0.5
+        vector_results: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
         """
-        Combine BM25 and vector search results using weighted scoring.
+        Combine BM25 and vector search results with deduplication.
+        Does NOT apply score fusion - that's only for fallback.
+        Re-ranker will determine final order.
 
         Args:
             bm25_results: Results from BM25 search
             vector_results: Results from vector search
-            alpha: Weight for BM25 scores (1-alpha for vector scores)
 
         Returns:
-            Combined and sorted results
+            Merged and deduplicated results with both scores attached
         """
-        # Create score dictionaries
+        # Track BM25 and vector scores separately
         bm25_scores = {r["id"]: r["score"] for r in bm25_results}
         vector_scores = {r["id"]: r["score"] for r in vector_results}
 
-        # Normalize scores separately
-        bm25_norm = self._normalize_scores(list(bm25_scores.values())) if bm25_scores else []
-        vector_norm = self._normalize_scores(list(vector_scores.values())) if vector_scores else []
-
-        bm25_scores_norm = dict(zip(bm25_scores.keys(), bm25_norm)) if bm25_norm else {}
-        vector_scores_norm = dict(zip(vector_scores.keys(), vector_norm)) if vector_norm else {}
-
-        # Combine scores
+        # Get all unique document IDs
         all_ids = set(bm25_scores.keys()) | set(vector_scores.keys())
-        combined = {}
 
-        for doc_id in all_ids:
-            bm25_score = bm25_scores_norm.get(doc_id, 0.0)
-            vector_score = vector_scores_norm.get(doc_id, 0.0)
-            combined[doc_id] = alpha * bm25_score + (1 - alpha) * vector_score
-
-        # Get full document info
+        # Get full document info (prefer vector result if in both)
         id_to_doc = {}
-        for r in bm25_results + vector_results:
+        for r in bm25_results:
             if r["id"] not in id_to_doc:
                 id_to_doc[r["id"]] = r
+        for r in vector_results:  # Vector overwrites if duplicate
+            id_to_doc[r["id"]] = r
 
-        # Create sorted results
+        # Create merged results with both scores
         results = []
-        for doc_id in sorted(combined.keys(), key=lambda x: combined[x], reverse=True):
+        for doc_id in all_ids:
             doc = id_to_doc[doc_id]
             results.append({
                 "id": doc_id,
-                "score": combined[doc_id],
                 "metadata": doc["metadata"],
                 "bm25_score": bm25_scores.get(doc_id, 0.0),
-                "vector_score": vector_scores.get(doc_id, 0.0)
+                "vector_score": vector_scores.get(doc_id, 0.0),
+                "in_bm25": doc_id in bm25_scores,
+                "in_vector": doc_id in vector_scores
             })
+
+        logger.info(f"Merged {len(bm25_results)} BM25 + {len(vector_results)} vector = {len(results)} unique documents")
 
         return results
 
@@ -301,33 +293,42 @@ class HybridSearchEngine:
         self,
         query: str,
         namespace: str = "default",
-        top_k: int = 20,
-        alpha: float = 0.5
+        bm25_k: int = 30,
+        vector_k: int = 30
     ) -> List[Dict[str, Any]]:
         """
         Perform hybrid search combining BM25 and vector search.
 
+        CORRECT PIPELINE:
+        1. BM25 top-k (default 30)
+        2. Vector top-k (default 30)
+        3. Merge + dedupe (up to 60 unique)
+        4. Return ALL merged (re-ranker will sort)
+
         Args:
             query: Search query
             namespace: Pinecone namespace
-            top_k: Number of results to return from each method before combining
-            alpha: Weight for BM25 scores (0.0 = vector only, 1.0 = BM25 only, 0.5 = equal weight)
+            bm25_k: Number of results from BM25 search
+            vector_k: Number of results from vector search
 
         Returns:
-            Combined and sorted results
+            Merged results (NOT sorted, re-ranker does that)
         """
-        logger.info(f"Performing hybrid search for query: '{query}' (alpha={alpha})")
+        logger.info(f"Performing hybrid search for query: '{query}' (BM25 k={bm25_k}, Vector k={vector_k})")
 
-        # Run both searches in parallel conceptually (but in sequence for simplicity)
-        bm25_results = await self.bm25_search(query, namespace, top_k)
-        vector_results = await self.vector_search(query, namespace, top_k)
+        # Step 1: BM25 top-k
+        bm25_results = await self.bm25_search(query, namespace, bm25_k)
+
+        # Step 2: Vector top-k
+        vector_results = await self.vector_search(query, namespace, vector_k)
 
         logger.info(f"BM25 found {len(bm25_results)} results, Vector found {len(vector_results)} results")
 
-        # Combine results
-        combined_results = self._combine_results(bm25_results, vector_results, alpha)
+        # Step 3: Merge + dedupe
+        combined_results = self._combine_results(bm25_results, vector_results)
 
-        return combined_results[:top_k]
+        # Return ALL merged results (re-ranker will handle sorting)
+        return combined_results
 
     async def rerank(
         self,
@@ -381,29 +382,49 @@ class HybridSearchEngine:
         query: str,
         namespace: str = "default",
         top_k: int = 3,
-        retrieval_k: int = 20,
-        alpha: float = 0.5
+        bm25_k: int = 30,
+        vector_k: int = 30
     ) -> List[Dict[str, Any]]:
         """
-        Complete pipeline: hybrid search + re-ranking.
+        CORRECT HYBRID RAG PIPELINE (Best Practice):
+
+        Step 1: BM25 top-k (default 30) - lexical candidates
+        Step 2: Vector top-k (default 30) - semantic candidates
+        Step 3: Merge + dedupe (up to 60 unique documents)
+        Step 4: Cross-encoder re-rank ALL merged candidates
+        Step 5: Return top 3-5 for context
+
+        This prevents lexical false positives from dominating
+        and ensures semantic relevance is properly weighted.
 
         Args:
             query: Search query
             namespace: Pinecone namespace
-            top_k: Final number of results to return after re-ranking
-            retrieval_k: Number of results to retrieve before re-ranking
-            alpha: Weight for BM25 in hybrid search
+            top_k: Final number of results to return (3-5 recommended)
+            bm25_k: Number of BM25 candidates (30 recommended)
+            vector_k: Number of vector candidates (30 recommended)
 
         Returns:
             Re-ranked top-k results
         """
-        # Step 1: Hybrid search
-        hybrid_results = await self.hybrid_search(query, namespace, retrieval_k, alpha)
+        # Step 1-3: Hybrid search (BM25 + Vector + Merge)
+        hybrid_results = await self.hybrid_search(query, namespace, bm25_k, vector_k)
 
-        # Step 2: Re-rank
-        reranked_results = await self.rerank(query, hybrid_results, top_k)
+        if not hybrid_results:
+            logger.warning("No results from hybrid search")
+            return []
 
-        return reranked_results
+        logger.info(f"Hybrid search returned {len(hybrid_results)} merged candidates for re-ranking")
+
+        # Step 4: Re-rank ALL merged candidates with cross-encoder
+        reranked_results = await self.rerank(query, hybrid_results, top_k=None)
+
+        # Step 5: Return top-k
+        final_results = reranked_results[:top_k]
+
+        logger.info(f"Returning top {len(final_results)} after re-ranking")
+
+        return final_results
 
 
 # Global instance
@@ -414,8 +435,8 @@ def hybrid_search_sync(
     query: str,
     namespace: str = "default",
     top_k: int = 3,
-    retrieval_k: int = 20,
-    alpha: float = 0.5
+    bm25_k: int = 30,
+    vector_k: int = 30
 ) -> List[Dict[str, Any]]:
     """
     Synchronous wrapper for hybrid_search_with_rerank.
@@ -427,8 +448,8 @@ def hybrid_search_sync(
         query: Search query
         namespace: Pinecone namespace
         top_k: Final number of results to return after re-ranking
-        retrieval_k: Number of results to retrieve before re-ranking
-        alpha: Weight for BM25 in hybrid search
+        bm25_k: Number of BM25 candidates
+        vector_k: Number of vector candidates
 
     Returns:
         Re-ranked top-k results
@@ -443,8 +464,8 @@ def hybrid_search_sync(
                 query=query,
                 namespace=namespace,
                 top_k=top_k,
-                retrieval_k=retrieval_k,
-                alpha=alpha
+                bm25_k=bm25_k,
+                vector_k=vector_k
             )
         )
 
