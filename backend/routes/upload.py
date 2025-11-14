@@ -2,152 +2,20 @@
 
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from typing import List
-from langchain_community.document_loaders import PyPDFLoader, TextLoader
-from langchain.schema import Document
 import re
 
 from services import upsert_doc
 from logger import logger
+from utils import extract_text_from_pdf_bytes
 
 router = APIRouter()
-
-def load_and_chunk_documents(
-    file_bytes: bytes,
-    filename: str,
-    max_chars: int = 1000
-) -> List[Document]:
-    """
-    Use LangChain's document loaders to read and chunk a PDF or TXT.
-    Returns a list of Document(page_content, metadata).
-    """
-    lower = filename.lower()
-    if lower.endswith(".pdf"):
-        # PyPDFLoader expects a file path, so we need to write bytes to a temp file
-        import tempfile
-        import os
-
-        suffix = ".pdf"
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            tmp.write(file_bytes)
-            tmp_path = tmp.name
-
-        loader = PyPDFLoader(tmp_path)
-        docs = loader.load_and_split()  
-        os.unlink(tmp_path)  # clean up temp file
-
-        # Combine all pages into one text
-        full_text = "\n\n".join(doc.page_content for doc in docs)
-        
-        # First split by paragraphs to maintain document structure
-        paragraphs = re.split(r'\n\s*\n', full_text)
-        
-        # Then process each paragraph into chunks
-        chunks = []
-        for para in paragraphs:
-            # Split paragraph into sentences
-            sentences = re.split(r'([.!?])\s+', para)
-            current_chunk = ""
-            
-            # Process sentences in pairs (sentence + punctuation)
-            for i in range(0, len(sentences), 2):
-                if i + 1 < len(sentences):
-                    sentence = sentences[i] + sentences[i + 1]
-                else:
-                    sentence = sentences[i]
-                
-                # If adding this sentence would exceed chunk size, save current chunk
-                if len(current_chunk) + len(sentence) > 800:  # Smaller chunks for better context
-                    if current_chunk:
-                        chunks.append(current_chunk.strip())
-                    current_chunk = sentence
-                else:
-                    current_chunk += " " + sentence
-            
-            # Add the last chunk if it exists
-            if current_chunk:
-                chunks.append(current_chunk.strip())
-        
-        # Convert chunks to Documents with metadata
-        final_docs = []
-        for i, chunk in enumerate(chunks):
-            metadata = {
-                "source": filename,
-                "chunk_id": i,
-                "total_chunks": len(chunks)
-            }
-            final_docs.append(Document(page_content=chunk, metadata=metadata))
-        return final_docs
-
-    elif lower.endswith(".txt"):
-        # TextLoader also expects a file path
-        import tempfile
-        import os
-
-        suffix = ".txt"
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, mode="wb") as tmp:
-            tmp.write(file_bytes)
-            tmp_path = tmp.name
-
-        loader = TextLoader(tmp_path, encoding="utf-8")
-        docs = loader.load_and_split()
-        os.unlink(tmp_path)
-
-        # Combine all text into one
-        full_text = "\n\n".join(doc.page_content for doc in docs)
-        
-        # First split by paragraphs to maintain document structure
-        paragraphs = re.split(r'\n\s*\n', full_text)
-        
-        # Then process each paragraph into chunks
-        chunks = []
-        for para in paragraphs:
-            # Split paragraph into sentences
-            sentences = re.split(r'([.!?])\s+', para)
-            current_chunk = ""
-            
-            # Process sentences in pairs (sentence + punctuation)
-            for i in range(0, len(sentences), 2):
-                if i + 1 < len(sentences):
-                    sentence = sentences[i] + sentences[i + 1]
-                else:
-                    sentence = sentences[i]
-                
-                # If adding this sentence would exceed chunk size, save current chunk
-                if len(current_chunk) + len(sentence) > 800:  # Smaller chunks for better context
-                    if current_chunk:
-                        chunks.append(current_chunk.strip())
-                    current_chunk = sentence
-                else:
-                    current_chunk += " " + sentence
-            
-            # Add the last chunk if it exists
-            if current_chunk:
-                chunks.append(current_chunk.strip())
-        
-        # Convert chunks to Documents with metadata
-        final_docs = []
-        for i, chunk in enumerate(chunks):
-            metadata = {
-                "source": filename,
-                "chunk_id": i,
-                "total_chunks": len(chunks)
-            }
-            final_docs.append(Document(page_content=chunk, metadata=metadata))
-        return final_docs
-
-    else:
-        raise ValueError("Unsupported file type in loader")
-
 
 @router.post("/")
 async def upload_documents(
     files: List[UploadFile] = File(...),
     namespace: str = "default"
 ):
-    """
-    Upload endpoint. By default, uses LangChain's PyPDFLoader/TextLoader to extract + chunk.
-    If you want to revert to manual chunking, comment out the LangChain code and uncomment below.
-    """
+    """Upload endpoint that extracts text and lets the backend chunk it consistently."""
     total_chunks = 0
     total_upserted = 0
 
@@ -168,72 +36,46 @@ async def upload_documents(
             namespace,
         )
 
+        lower = name.lower()
         try:
-            docs = load_and_chunk_documents(data, name, max_chars=1000)
+            if lower.endswith(".pdf"):
+                text = extract_text_from_pdf_bytes(data)
+            elif lower.endswith(".txt"):
+                text = data.decode("utf-8", errors="ignore")
+            else:
+                raise HTTPException(status_code=415, detail="Only PDF or TXT allowed")
+        except HTTPException:
+            raise
         except Exception as e:
-            logger.exception("Failed to load file '%s' for indexing", name)
-            raise HTTPException(status_code=400, detail=f"Loader error: {e}")
+            logger.exception("Failed to extract text from file '%s'", name)
+            raise HTTPException(status_code=400, detail=f"Text extraction error: {e}")
 
-        if not docs:
-            logger.warning(
-                "Loader produced no chunks for file '%s' (namespace=%s)",
-                name,
-                namespace,
-            )
+        text = text.strip()
+        if not text:
+            logger.warning("No text extracted from '%s' (namespace=%s)", name, namespace)
             continue
 
         safe_doc_id = re.sub(r'[^a-zA-Z0-9]+', '_', name).strip('_').lower() or "document"
 
-        file_chunks_indexed = 0
-        file_vectors_upserted = 0
+        result = upsert_doc(
+            text,
+            doc_id=safe_doc_id,
+            source=name,
+            namespace=namespace,
+            metadata_extra={
+                "file_name": name,
+                "file_id": safe_doc_id,
+            },
+        )
 
-        for idx, doc in enumerate(docs):
-            # Each doc is a langchain.schema.Document with page_content + metadata
-            chunk_id = doc.metadata.get("chunk_id", f"{name}__0")
-            section_index = chunk_id if isinstance(chunk_id, int) else idx
-            result = upsert_doc(
-                doc.page_content,
-                doc_id=safe_doc_id,
-                source=name,
-                namespace=namespace,
-                metadata_extra={
-                    "file_name": name,
-                    "file_id": safe_doc_id,
-                    "section_index": section_index,
-                },
-            )
-
-            file_chunks_indexed += result.get("chunks", 0)
-            file_vectors_upserted += result.get("upserted", 0)
-
-            logger.info(
-                "Indexed chunk %s from file '%s' (namespace=%s)",
-                section_index,
-                name,
-                namespace,
-            )
-
-        # if name.lower().endswith(".pdf"):
-        #     try:
-        #         text = extract_text_from_pdf_bytes(data)
-        #     except Exception as e:
-        #         raise HTTPException(status_code=400, detail=f"PDF parse error: {e}")
-        # elif name.lower().endswith(".txt"):
-        #     text = data.decode("utf-8", errors="ignore")
-        # else:
-        #     raise HTTPException(status_code=415, detail="Only PDF or TXT allowed")
-        #
-        # chunks = chunk_document_text(text)
-        # for idx, chunk in enumerate(chunks):
-        #     chunk_id = f"{name}__chunk{idx}"
-        #     upsert_doc(chunk, doc_id=chunk_id, namespace=namespace)
-        #     total_chunks += 1
+        file_chunks_indexed = result.get("chunks", 0)
+        file_vectors_upserted = result.get("upserted", 0)
 
         total_chunks += file_chunks_indexed
         total_upserted += file_vectors_upserted
 
         logger.info(
-            "Finished indexing file '%s' (namespace=%s, chunks_indexed=%s, pinecone_vectors=%s)",
+            "Indexed file '%s' (namespace=%s, chunks_indexed=%s, pinecone_vectors=%s)",
             name,
             namespace,
             file_chunks_indexed,
