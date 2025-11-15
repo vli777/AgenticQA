@@ -1,96 +1,89 @@
-# AgenticQA
-A modern, agent-powered document Q&A system. Upload your docs, ask questions, and get smart, context-rich answers—powered by an LLM agent that searches, reasons, and cites its sources.
-<img width="1000" height="980" alt="image" src="https://github.com/user-attachments/assets/829111ea-915c-428c-b6ca-4c4202187b3f" />
+ # AgenticQA
 
+  AgenticQA is a document-centric Q&A system that feels like a careful research assistant. Upload PDF or text files, ask
+  natural language questions, and receive answers that cite supporting passages. The backend runs a conversation-aware
+  retrieval agent that plans searches, rewrites follow-up questions, and verifies every response against the evidence
+  before replying.
 
+  ---
 
----
+  ## Overview
 
-## 🚀 Overview
+  Traditional RAG pipelines run a single search and hope the results are relevant. AgenticQA extends that idea with:
 
-**AgenticQA** uses advanced agentic retrieval (beyond traditional RAG) to enable natural-language Q&A over your own files. Instead of just searching once, our agent plans, searches, and reasons in multiple steps—like a real researcher.
+  - Multi-step planning: the agent rephrases the question, runs several searches, and merges the findings.
+  - Topic-aware memory: the conversation is grouped into topics so follow-up questions automatically reference the right
+  context without polluting the vector store.
+  - Evidence-first answers: each response is drafted from the retrieved snippets, then verified to ensure it is actually
+  supported. If the evidence is unclear, the agent says so.
+  - Deterministic chunking: documents are split once inside the backend, guaranteeing consistent windows and overlap no
+  matter how they were uploaded.
 
-- **Upload**: PDF or text files  
-- **Ask**: Any question in natural language  
-- **Get**: Detailed, cited answers powered by OpenAI GPT and Pinecone, via LangChain agentic workflows
+  The result is a more cautious and transparent assistant that refuses to guess when the documents do not clearly answer
+  the question.
 
----
+  ---
 
-## ✨ Features
+  ## Key Features
 
-- Agentic retrieval (LLM “agent” can plan, retrieve, and reason step-by-step)
-- Q&A over uploaded docs (PDF, TXT)
-- Fast, secure embeddings + search (OpenAI + Pinecone)
-- Modern chat interface (React)
-- Source citations and agent reasoning trace
-- Easy deployment (Vercel & Railway/Render)
-- Runs on free-tier cloud infrastructure
+  - Upload PDF or TXT documents directly from the chat interface.
+  - Hybrid search (BM25 + vector) with cross-encoder re-ranking, Pinecone storage, and sentence-level chunking.
+  - Per-topic conversational memory that automatically rewrites follow-up questions before retrieval.
+  - Strict answer synthesis: answers cite their sources, fall back to “The documents do not clearly specify this.” when
+  evidence is thin, and include a verification verdict in the reasoning trail.
+  - React chat frontend with agentic and plain RAG modes, plus namespace management and easy clearing of stored vectors.
 
----
+  ---
 
-## 🛠️ Tech Stack
+  ## Architecture in Brief
 
-- **Backend**: Python, FastAPI, LangChain, OpenAI API, HuggingFace, NVIDIA API (Llama/Maverick), Pinecone vector DB  
-- **Frontend**: React, Vercel  
-- **Cloud**: Railway/Render (backend), Vercel (frontend)
+  1. The frontend uploads files to the FastAPI backend. Documents are cleaned, chunked (2,000 characters with 20%
+  overlap), embedded, and upserted to Pinecone.
+  2. Each chat turn carries a stable `conversation_id`. The backend memory manager assigns messages to topics,
+  summarizes older turns, and supplies the relevant topic context.
+  3. Before retrieval, the agent rewrites the user’s latest question into a standalone query using the current topic
+  history.
+  4. Hybrid search returns candidate snippets. The agent drafts an answer using only those snippets, verifies it, and
+  cites the provenance tags.
+  5. The answer, reasoning steps, verification verdict, and sources are returned to the client.
 
----
+  ---
 
-## 🏗️ Architecture
-![image](https://github.com/user-attachments/assets/5ddb6149-a73a-4607-9f60-985b52d44e1c)
+  ## Requirements
 
-**Flow:**
-1. **User uploads a doc** → backend splits and embeds → stored in Pinecone
-2. **User asks a question** → agent plans retrieval steps, pulls context, generates answer, cites sources
-3. **Answer & sources** returned to frontend chat UI
+  - Python 3.10+
+  - Node.js 18+ (for the frontend)
+  - OpenAI API key (for embeddings or LLMs)
+  - NVIDIA API key (for Llama/Maverick inference)
+  - Pinecone API key and index
+  - Railway or Render account (backend deployment) and Vercel (frontend) if you plan to host it
 
----
+  ---
 
-## 📦 Requirements
+  ## Getting Started
 
-- Python 3.10+
-- Node.js 18+ (for frontend)
-- OpenAI API key ([get one here](https://platform.openai.com/signup))
-- NVIDIA API key (for Llama/Maverick models; [get one here](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/langchain/models/))
-- Pinecone API key ([free signup](https://www.pinecone.io/start/))
-- Railway or Render account (backend deploy)
-- Vercel account (frontend deploy)
+  ### Backend
 
----
+  ```bash
+  git clone https://github.com/vli777/agenticqa.git
+  cd agenticqa/backend
+  python -m venv venv
+  source venv/bin/activate  # or venv\Scripts\activate on Windows
+  pip install -r requirements.txt
+  uvicorn main:app --reload
 
-## ⚡ Usage
+  Environment variables (set in .env or via your hosting platform):
 
-### 1. Clone and set up backend
+  OPENAI_API_KEY=...
+  NVIDIA_API_KEY=...
+  PINECONE_API_KEY=...
+  PINECONE_INDEX_NAME=agenticqa
+  EMBEDDING_MODEL=text-embedding-3-small  # or multilingual-e5-large, llama-text-embed-v2
 
-```
-git clone https://github.com/vli777/agenticqa.git
-cd agenticqa/backend
-pip install -r requirements.txt
-# Set environment variables: OPENAI_API_KEY, PINECONE_API_KEY, etc.
-uvicorn main:app --reload
-```
+  ### Frontend
 
-```
-# === Required for LLMs (at least one needed) ===
-OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxx     # OpenAI GPT-3.5/4 key
-NVIDIA_API_KEY=nvapi-xxxxxxxxxxxxxxxxxxxx  # NVIDIA Llama/Maverick API key
+  cd ../frontend
+  npm install
+  npm run dev
 
-# === Required for Semantic Search ===
-PINECONE_API_KEY=your-pinecone-key
-PINECONE_INDEX_NAME=agenticqa
-
-# === Required: Embedding Model Selection ===
-# Options: text-embedding-3-small (OpenAI), multilingual-e5-large (HuggingFace), llama-text-embed-v2 (NVIDIA)
-EMBEDDING_MODEL=text-embedding-3-small
-```
-### 2. Set up frontend
-```
-cd ../frontend
-npm install
-npm run dev
-# Edit .env to point to your backend API
-```
-
-### 3. Deploy
-- Backend: Deploy to Railway or Render
-- Frontend: Deploy to Vercel
+  Create a .env with VITE_API_BASE_URL=http://localhost:8000 (or your deployed backend) and visit the dev server.
