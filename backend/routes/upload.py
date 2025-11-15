@@ -4,9 +4,15 @@ from fastapi import APIRouter, UploadFile, File, HTTPException
 from typing import List
 import re
 
-from services import upsert_doc
+from services import upsert_doc, chunk_text
 from logger import logger
 from utils import extract_text_from_pdf_bytes
+from document_summary import (
+    extract_structured_summary,
+    store_document_summary,
+    detect_cross_document_overlap,
+    store_cross_document_summary
+)
 
 router = APIRouter()
 
@@ -57,6 +63,33 @@ async def upload_documents(
 
         safe_doc_id = re.sub(r'[^a-zA-Z0-9]+', '_', name).strip('_').lower() or "document"
 
+        # Chunk the text first (needed for both upsert and summary)
+        from services import clean_text
+        text = clean_text(text)
+        chunks = chunk_text(text)
+
+        # Generate structured summary BEFORE upserting (so we have chunks)
+        logger.info(f"Extracting structured summary for '{name}'...")
+        summary = extract_structured_summary(
+            doc_id=safe_doc_id,
+            chunks=chunks,
+            source=name,
+            namespace=namespace
+        )
+
+        # Store summary in Pinecone
+        store_document_summary(summary, namespace)
+
+        # Check for cross-document overlap
+        cross_summary = detect_cross_document_overlap(summary, namespace)
+        if cross_summary:
+            logger.info(
+                f"Cross-document overlap detected between {safe_doc_id} and "
+                f"{cross_summary['related_docs']}"
+            )
+            store_cross_document_summary(cross_summary, namespace)
+
+        # Now upsert the document chunks as usual
         result = upsert_doc(
             text,
             doc_id=safe_doc_id,
@@ -75,20 +108,20 @@ async def upload_documents(
         total_upserted += file_vectors_upserted
 
         logger.info(
-            "Indexed file '%s' (namespace=%s, chunks_indexed=%s, pinecone_vectors=%s)",
+            "Indexed file '%s' (namespace=%s, chunks_indexed=%s, pinecone_vectors=%s, summary_extracted=True)",
             name,
             namespace,
             file_chunks_indexed,
             file_vectors_upserted,
         )
 
-    # Clear BM25 cache ONCE after all documents uploaded
+    # Clear cache ONCE after all documents uploaded (legacy BM25 cache, kept for backward compatibility)
     try:
         from hybrid_search import hybrid_search_engine
         hybrid_search_engine.clear_cache(namespace)
-        logger.info(f"Cleared BM25 cache for namespace '{namespace}' after uploading {len(files)} file(s)")
+        logger.info(f"Cleared search cache for namespace '{namespace}' after uploading {len(files)} file(s)")
     except Exception as e:
-        logger.warning(f"Failed to clear BM25 cache: {str(e)}")
+        logger.warning(f"Failed to clear search cache: {str(e)}")
 
     logger.info(
         "Upload request complete (namespace=%s, total_chunks=%s, total_vectors=%s)",
