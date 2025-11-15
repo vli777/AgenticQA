@@ -35,13 +35,15 @@ if "*" not in CORS_ORIGINS:
 #   EMBEDDING_MODEL="nvidia-embed"  or  "text-embedding-3-small"
 _raw = os.getenv("EMBEDDING_MODEL", "").strip()
 
-# Recognize exactly these full model names; otherwise, default to nvidia/nv-embedqa-e5-v5
-#  • "nvidia/nv-embedqa-e5-v5" → NVIDIA E5 (1024-dim, recommended for existing indexes)
+# Recognize exactly these full model names; otherwise, default to llama-3.2-nv-embedqa-1b-v2
+#  • "llama-3.2-nv-embedqa-1b-v2" → NVIDIA Llama 3.2 embeddings (1024-dim, Q&A optimized, DEFAULT)
+#  • "nvidia/nv-embedqa-e5-v5" → NVIDIA E5 (1024-dim, legacy)
 #  • "nvidia/nv-embed-v1" → NVIDIA nv-embed-v1 (4096-dim, high quality)
 #  • "nvidia/embed-qa-4" → NVIDIA embedding-qa-4 (Q&A optimized)
 #  • "text-embedding-3-small" → OpenAI (1536-dim)
 # If you want to add more in future, just include them here.
 _SUPPORTED = {
+    "llama-3.2-nv-embedqa-1b-v2",
     "nvidia/nv-embedqa-e5-v5",
     "nvidia/nv-embed-v1",
     "nvidia/embed-qa-4",
@@ -52,7 +54,7 @@ _SUPPORTED = {
 if _raw in _SUPPORTED:
     EMBEDDING_MODEL = _raw
 else:
-    EMBEDDING_MODEL = "nvidia/nv-embedqa-e5-v5"  # Default: 1024-dim, compatible with existing indexes
+    EMBEDDING_MODEL = "llama-3.2-nv-embedqa-1b-v2"  # Default: 1024-dim, Q&A optimized
 
 # Semantic tagging configuration (Hugging Face zero-shot + heuristics)
 ENABLE_SEMANTIC_TAGGING = os.getenv("ENABLE_SEMANTIC_TAGGING", "true").lower() == "true"
@@ -80,10 +82,9 @@ else:
 SEMANTIC_TAG_THRESHOLD = float(os.getenv("SEMANTIC_TAG_THRESHOLD", "0.6"))
 SEMANTIC_TAG_BOOST = float(os.getenv("SEMANTIC_TAG_BOOST", "0.2"))
 
-# Hybrid search configuration (Best Practice Pipeline)
-# Keep these internal to avoid accidental overrides
-BM25_K = 30
-VECTOR_K = 30
+# Vector search configuration (NVIDIA-optimized)
+# NVIDIA embeddings + reranker: 86.83% recall@5 (vs 13.01% for BM25)
+VECTOR_K = 60  # Number of candidates for NVIDIA reranker (llama-3.2-nv-rerankqa-1b-v2)
 
 # CROSS_ENCODER_MODEL: Model to use for re-ranking
 CROSS_ENCODER_MODEL = os.getenv("CROSS_ENCODER_MODEL", "cross-encoder/stsb-roberta-base")
