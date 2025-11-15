@@ -7,6 +7,7 @@ from config import DEBUG, EMBEDDING_MODEL, CORS_ORIGINS
 from utils import get_embedding
 from routes.upload import router as upload_router
 from routes.qa import router as qa_router
+from routes.debug_summary import router as debug_summary_router
 
 app = FastAPI(debug=DEBUG)
 app.add_middleware(
@@ -18,6 +19,7 @@ app.add_middleware(
 )
 app.include_router(upload_router, prefix="/upload", tags=["upload"])
 app.include_router(qa_router, prefix="/ask", tags=["qa"])
+app.include_router(debug_summary_router, prefix="/debug/summary", tags=["debug"])
 
 if DEBUG:
     from routes.debug import router as debug_router

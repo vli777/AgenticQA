@@ -11,7 +11,7 @@ from pypdf import PdfReader
 from config import EMBEDDING_MODEL, OPENAI_API_KEY, NVIDIA_API_KEY, ENABLE_CACHING
 
 _nvidia_embeddings = NVIDIAEmbeddings(
-    model=EMBEDDING_MODEL if EMBEDDING_MODEL and EMBEDDING_MODEL.startswith("nvidia") else "nvidia/nv-embedqa-e5-v5",
+    model=EMBEDDING_MODEL if EMBEDDING_MODEL and (EMBEDDING_MODEL.startswith("nvidia") or EMBEDDING_MODEL.startswith("llama")) else "llama-3.2-nv-embedqa-1b-v2",
     api_key=NVIDIA_API_KEY
 ) if NVIDIA_API_KEY else None
 _openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
@@ -19,7 +19,7 @@ _openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 def _compute_embedding(text: str, model: str) -> List[float]:
     """Internal function to compute embedding without caching."""
-    if model.startswith("nvidia/") or model == "nvidia-embed":
+    if model.startswith("nvidia/") or model.startswith("llama") or model == "nvidia-embed":
         if _nvidia_embeddings is None:
             raise ValueError("NVIDIA_API_KEY not configured for NVIDIA embeddings")
         # NVIDIA models have a 512 token limit
@@ -90,7 +90,7 @@ def get_embeddings_batch(texts: List[str], model: str = None) -> List[List[float
     """
     model = model or EMBEDDING_MODEL
 
-    if model.startswith("nvidia/") or model == "nvidia-embed":
+    if model.startswith("nvidia/") or model.startswith("llama") or model == "nvidia-embed":
         if _nvidia_embeddings is None:
             raise ValueError("NVIDIA_API_KEY not configured for NVIDIA embeddings")
         # NVIDIA models have a 512 token limit - truncate texts to be safe
