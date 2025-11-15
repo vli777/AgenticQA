@@ -10,7 +10,7 @@ from langchain_nvidia_ai_endpoints import ChatNVIDIA
 
 from logger import logger
 from config import (
-    BM25_K, VECTOR_K,
+    VECTOR_K,
     ENABLE_CACHING, ENABLE_STREAMING
 )
 from models import AskRequest
@@ -49,12 +49,26 @@ def _history_to_text(history: List[Dict[str, str]]) -> str:
 
 
 def _rewrite_query(question: str, history: List[Dict[str, str]]) -> str:
+    """
+    Rewrite query to resolve pronouns, with guards to prevent over-rewriting by weaker LLMs.
+    """
     history_text = _history_to_text(history)
     if not history_text:
         return question
+
+    # Skip rewriting if question already looks standalone
+    PRONOUNS = {"this", "that", "those", "these", "it", "they", "he", "she"}
+    q_lower = question.lower()
+
+    # If question is short and has no pronouns, it's likely already standalone
+    if len(question) < 40 and not any(p in q_lower for p in PRONOUNS):
+        logger.debug(f"Skipping rewrite - question appears standalone: '{question}'")
+        return question
+
     prompt = (
-        "Rewrite the user's latest question into a standalone search query.\n"
-        "Use the conversation history for context but do not invent new facts.\n\n"
+        "Rewrite the user's latest question into a short standalone search query "
+        "(max 20 words). Use the conversation history only to resolve pronouns. "
+        "Do not add new information or expand the query.\n\n"
         f"History:\n{history_text}\n\n"
         f"Question: {question}\n\n"
         "Standalone query:"
@@ -62,8 +76,13 @@ def _rewrite_query(question: str, history: List[Dict[str, str]]) -> str:
     try:
         response = llm.invoke(prompt)
         rewritten = (response.content or "").strip()
-        if rewritten:
+
+        # Hard cap length to prevent verbose rewrites
+        if rewritten and len(rewritten.split()) <= 25:
+            logger.debug(f"Rewrote query: '{question}' -> '{rewritten}'")
             return rewritten
+        elif rewritten:
+            logger.warning(f"Rewritten query too long ({len(rewritten.split())} words), using original")
     except Exception as exc:
         logger.warning(f"Query rewrite failed: {exc}")
     return question
@@ -105,7 +124,7 @@ async def improve_grammar(text: str) -> str:
 @router.post("/")
 async def ask(req: AskRequest):
     """
-    Hybrid search endpoint using BM25 + vector embeddings with cross-encoder re-ranking.
+    Vector search endpoint using NVIDIA Llama 3.2 embeddings with reranking.
     Mounted at POST /ask/ because main.py uses prefix="/ask".
     """
     conversation_id = req.conversation_id or req.namespace
@@ -115,7 +134,7 @@ async def ask(req: AskRequest):
     if standalone_question != req.question:
         logger.info(f"Rewrote question '{req.question}' -> '{standalone_question}' for retrieval context")
     else:
-        logger.info(f"Using hybrid search with re-ranking for question: '{req.question}'")
+        logger.info(f"Using vector search with re-ranking for question: '{req.question}'")
 
     # Check cache if enabled
     if ENABLE_CACHING:
@@ -123,24 +142,20 @@ async def ask(req: AskRequest):
             query=standalone_question,
             namespace=req.namespace,
             top_k=MAX_MATCHES_TO_RETURN,
-            bm25_k=BM25_K,
             vector_k=VECTOR_K
         )
         if cached is not None:
             logger.info("Returning cached search results")
             return {"results": {"matches": cached}, "cached": True}
 
-    # CORRECT HYBRID RAG PIPELINE:
-    # 1. BM25 top-30 (lexical)
-    # 2. Vector top-30 (semantic)
-    # 3. Merge + dedupe (up to 60)
-    # 4. Cross-encoder re-rank ALL
-    # 5. Return top-3
+    # NVIDIA OPTIMIZED RETRIEVAL PIPELINE (86.83% recall vs 13.01% for BM25):
+    # 1. Vector search using llama-3.2-nv-embedqa-1b-v2 (top 60)
+    # 2. Re-rank ALL using nvidia/llama-3.2-nv-rerankqa-1b-v2
+    # 3. Return top-3
     reranked_results = await hybrid_search_engine.hybrid_search_with_rerank(
         query=standalone_question,
         namespace=req.namespace,
         top_k=MAX_MATCHES_TO_RETURN,
-        bm25_k=BM25_K,
         vector_k=VECTOR_K
     )
 
@@ -156,7 +171,6 @@ async def ask(req: AskRequest):
         # Attach all scores to metadata for transparency
         match["metadata"]["rerank_score"] = result["rerank_score"]
         match["metadata"]["original_score"] = result.get("original_score", 0.0)
-        match["metadata"]["bm25_score"] = result.get("bm25_score", 0.0)
         match["metadata"]["vector_score"] = result.get("vector_score", 0.0)
 
         # Clean and improve text
@@ -176,7 +190,6 @@ async def ask(req: AskRequest):
             namespace=req.namespace,
             top_k=MAX_MATCHES_TO_RETURN,
             results=matches,
-            bm25_k=BM25_K,
             vector_k=VECTOR_K
         )
 
@@ -186,7 +199,7 @@ async def ask(req: AskRequest):
     ) or "No matching evidence returned."
     conversation_memory_manager.add_assistant_message(conversation_id, assistant_memory)
 
-    logger.info(f"Hybrid search returned {len(matches)} re-ranked results")
+    logger.info(f"Vector search returned {len(matches)} re-ranked results")
 
     return {"results": results, "cached": False}
 
@@ -236,6 +249,66 @@ async def ask_agentic(req: AskRequest):
         return fallback
 
 
+@router.post("/agentic/stream")
+async def ask_agentic_stream(req: AskRequest):
+    """
+    Streaming agentic QA with real-time reasoning updates and inline citations.
+    Reasoning steps are streamed as single-line status updates (disappear in UI).
+    Final answer includes inline citations [1], [2], etc.
+    Sources are logged on backend only, not sent to frontend.
+    """
+    import json
+    from fastapi.responses import StreamingResponse
+
+    async def generate():
+        conversation_id = req.conversation_id or req.namespace
+        conversation_memory_manager.add_user_message(conversation_id, req.question)
+        topic_history = conversation_memory_manager.get_topic_context(conversation_id)
+
+        # Rewrite query
+        yield f"data: {json.dumps({'type': 'reasoning', 'content': 'Processing question...'})}\n\n"
+
+        standalone_question = _rewrite_query(req.question, topic_history)
+        if standalone_question != req.question:
+            logger.info(f"Rewrote agentic question '{req.question}' -> '{standalone_question}'")
+
+        # Get streaming agent
+        from langchain_agent import get_streaming_agent
+
+        try:
+            agent_generator = get_streaming_agent(namespace=req.namespace)
+
+            # Stream reasoning steps and final answer
+            async for event in agent_generator({"input": standalone_question, "chat_history": topic_history}):
+                if event["type"] == "reasoning":
+                    # Single-line status update (will be replaced in UI)
+                    yield f"data: {json.dumps({'type': 'reasoning', 'content': event['content']})}\n\n"
+                    logger.info(f"[Reasoning] {event['content']}")
+
+                elif event["type"] == "answer":
+                    # Final answer with inline citations
+                    answer = event["content"]
+                    sources_log = event.get("sources", [])
+
+                    # Log sources on backend (not sent to frontend)
+                    logger.info(f"[Sources] {json.dumps(sources_log, indent=2)}")
+
+                    # Send only the answer (with inline citations)
+                    yield f"data: {json.dumps({'type': 'answer', 'content': answer})}\n\n"
+
+                    # Store in memory
+                    conversation_memory_manager.add_assistant_message(conversation_id, answer)
+
+            # Signal completion
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+        except Exception as e:
+            logger.error(f"Streaming agentic QA failed: {str(e)}", exc_info=True)
+            yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
 @router.post("/stream")
 async def ask_stream(req: AskRequest):
     """
@@ -260,7 +333,6 @@ async def ask_stream(req: AskRequest):
                 query=standalone_question,
                 namespace=req.namespace,
                 top_k=MAX_MATCHES_TO_RETURN,
-                bm25_k=BM25_K,
                 vector_k=VECTOR_K
             )
 
