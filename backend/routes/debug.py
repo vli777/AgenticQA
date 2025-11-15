@@ -6,7 +6,6 @@ from fastapi import APIRouter
 
 from config import ENABLE_CACHING
 from pinecone_client import pc, index
-from hybrid_search import hybrid_search_engine
 from logger import logger
 
 if ENABLE_CACHING:
@@ -58,8 +57,6 @@ async def clear_namespace(namespace: str):
             namespace,
             exc,
         )
-
-    hybrid_search_engine.clear_cache(namespace)
 
     caches_cleared = False
     if clear_all_caches is not None:
