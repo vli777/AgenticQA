@@ -115,14 +115,6 @@ async def upload_documents(
             file_vectors_upserted,
         )
 
-    # Clear cache ONCE after all documents uploaded (legacy BM25 cache, kept for backward compatibility)
-    try:
-        from hybrid_search import hybrid_search_engine
-        hybrid_search_engine.clear_cache(namespace)
-        logger.info(f"Cleared search cache for namespace '{namespace}' after uploading {len(files)} file(s)")
-    except Exception as e:
-        logger.warning(f"Failed to clear search cache: {str(e)}")
-
     logger.info(
         "Upload request complete (namespace=%s, total_chunks=%s, total_vectors=%s)",
         namespace,
