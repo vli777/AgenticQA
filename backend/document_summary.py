@@ -202,7 +202,12 @@ def get_document_summary(doc_id: str, namespace: str = "default") -> Optional[Di
             return None
 
         vector_data = response.vectors[summary_id]
-        metadata = vector_data.get("metadata", {})
+
+        # Handle both dict and object-style Vector data (SDK compatibility)
+        if hasattr(vector_data, 'metadata'):
+            metadata = getattr(vector_data, 'metadata', {}) or {}
+        else:
+            metadata = vector_data.get("metadata", {})
 
         if "summary_json" in metadata:
             summary = json.loads(metadata["summary_json"])
@@ -502,7 +507,12 @@ def fetch_chunks_by_refs(
 
         chunks = []
         for chunk_id, vector_data in (response.vectors or {}).items():
-            metadata = vector_data.get("metadata", {})
+            # Handle both dict and object-style Vector data (SDK compatibility)
+            if hasattr(vector_data, 'metadata'):
+                metadata = getattr(vector_data, 'metadata', {}) or {}
+            else:
+                metadata = vector_data.get("metadata", {})
+
             chunks.append({
                 "id": chunk_id,
                 "text": metadata.get("text", ""),
