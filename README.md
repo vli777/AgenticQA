@@ -1,4 +1,5 @@
  # AgenticQA
+<img width="1245" height="1252" alt="Screenshot 2025-11-14 204431" src="https://github.com/user-attachments/assets/16487805-56f6-4c74-876d-1d73aa0ed36c" />
 
   AgenticQA is a document-centric Q&A system that feels like a careful research assistant. Upload PDF or text files, ask
   natural language questions, and receive answers that cite supporting passages. The backend runs a conversation-aware
