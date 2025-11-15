@@ -35,15 +35,16 @@ if "*" not in CORS_ORIGINS:
 #   EMBEDDING_MODEL="nvidia-embed"  or  "text-embedding-3-small"
 _raw = os.getenv("EMBEDDING_MODEL", "").strip()
 
-# Recognize exactly these full model names; otherwise, default to nvidia-embed
-#  • "nvidia-embed" → NVIDIA hosted embeddings (recommended, free tier)
-#  • "nvidia/nv-embed-v1" → NVIDIA nv-embed-v1 (high quality)
-#  • "nvidia/embedding-qa-4" → NVIDIA embedding-qa-4 (Q&A optimized)
-#  • "text-embedding-3-small" → OpenAI
+# Recognize exactly these full model names; otherwise, default to nvidia/nv-embedqa-e5-v5
+#  • "nvidia/nv-embedqa-e5-v5" → NVIDIA E5 (1024-dim, recommended for existing indexes)
+#  • "nvidia/nv-embed-v1" → NVIDIA nv-embed-v1 (4096-dim, high quality)
+#  • "nvidia/embed-qa-4" → NVIDIA embedding-qa-4 (Q&A optimized)
+#  • "text-embedding-3-small" → OpenAI (1536-dim)
 # If you want to add more in future, just include them here.
 _SUPPORTED = {
-    "nvidia-embed",
+    "nvidia/nv-embedqa-e5-v5",
     "nvidia/nv-embed-v1",
+    "nvidia/embed-qa-4",
     "nvidia/embedding-qa-4",
     "text-embedding-3-small",
 }
@@ -51,7 +52,7 @@ _SUPPORTED = {
 if _raw in _SUPPORTED:
     EMBEDDING_MODEL = _raw
 else:
-    EMBEDDING_MODEL = "nvidia-embed"  # Default to NVIDIA hosted embeddings
+    EMBEDDING_MODEL = "nvidia/nv-embedqa-e5-v5"  # Default: 1024-dim, compatible with existing indexes
 
 # Semantic tagging configuration (Hugging Face zero-shot + heuristics)
 ENABLE_SEMANTIC_TAGGING = os.getenv("ENABLE_SEMANTIC_TAGGING", "true").lower() == "true"
