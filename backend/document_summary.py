@@ -197,11 +197,11 @@ def get_document_summary(doc_id: str, namespace: str = "default") -> Optional[Di
         # Fetch by ID
         response = index.fetch(ids=[summary_id], namespace=namespace)
 
-        if not response.get("vectors") or summary_id not in response["vectors"]:
+        if not response.vectors or summary_id not in response.vectors:
             logger.warning(f"No summary found for {doc_id} in namespace '{namespace}'")
             return None
 
-        vector_data = response["vectors"][summary_id]
+        vector_data = response.vectors[summary_id]
         metadata = vector_data.get("metadata", {})
 
         if "summary_json" in metadata:
