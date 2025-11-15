@@ -523,7 +523,7 @@ class HybridSearchEngine:
             # Map reranked results back to original documents
             # The reranker returns documents in relevance order with metadata
             reranked_docs = []
-            for reranked_doc in reranked_results:
+            for idx, reranked_doc in enumerate(reranked_results):
                 # Find matching original document by content
                 matching_doc = None
                 for orig_doc in documents:
@@ -532,8 +532,15 @@ class HybridSearchEngine:
                         break
 
                 if matching_doc:
-                    # Add rerank score from metadata if available
-                    matching_doc["rerank_score"] = getattr(reranked_doc.metadata, 'relevance_score', 1.0)
+                    # Extract rerank score from Document metadata
+                    # NVIDIA reranker puts relevance_score in metadata dict
+                    if hasattr(reranked_doc, 'metadata') and isinstance(reranked_doc.metadata, dict):
+                        rerank_score = reranked_doc.metadata.get('relevance_score', 1.0 - (idx * 0.01))
+                    else:
+                        # Fallback: use position-based scoring (higher position = higher score)
+                        rerank_score = 1.0 - (idx * 0.01)
+
+                    matching_doc["rerank_score"] = rerank_score
                     matching_doc["original_score"] = matching_doc.get("score", 0.0)
                     reranked_docs.append(matching_doc)
 
