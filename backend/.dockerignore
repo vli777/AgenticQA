@@ -1,0 +1,64 @@
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments (CRITICAL - these are huge!)
+venv/
+env/
+ENV/
+.venv/
+.env/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+*.md
+OPTIMIZATION.md
+HYBRID_SEARCH.md
+
+# Logs and databases
+*.log
+*.sqlite3
+
+# Environment files (use Railway env vars instead)
+.env
+.env.example
+
+# Cache
+.cache/
+.ruff_cache/
+
+# Debug scripts (not needed in production)
+debug_search.py
+
+# Railway config (not needed in container)
+railway.toml
+Procfile
+runtime.txt
+
+# OS files
+.DS_Store
+Thumbs.db
