@@ -25,15 +25,25 @@ class HybridSearchEngine:
         Initialize the hybrid search engine.
 
         Args:
-            reranker_model: NVIDIA reranker model (defaults to nvidia/rerank-qa-mistral-4b:1)
+            reranker_model: NVIDIA reranker model (optional, tries nv-rerank-qa-mistral-4b-v3)
         """
         # Use NVIDIA hosted reranker (no local dependencies!)
-        self.reranker = NVIDIARerank(
-            model=reranker_model or "nvidia/rerank-qa-mistral-4b:1",
-            api_key=NVIDIA_API_KEY
-        ) if NVIDIA_API_KEY else None
+        self.reranker = None
+        if NVIDIA_API_KEY:
+            try:
+                model_name = reranker_model or "nv-rerank-qa-mistral-4b-v3"
+                self.reranker = NVIDIARerank(
+                    model=model_name,
+                    api_key=NVIDIA_API_KEY
+                )
+                logger.info(f"Initialized HybridSearchEngine with NVIDIA reranker: {model_name} (hosted, 0MB image overhead)")
+            except Exception as e:
+                logger.warning(f"Failed to initialize NVIDIA reranker: {e}. Falling back to hybrid score sorting.")
+                self.reranker = None
+        else:
+            logger.info("NVIDIA_API_KEY not set, reranker disabled. Using hybrid score sorting.")
+
         self.bm25_cache: Dict[str, Tuple[BM25Okapi, List[Dict[str, Any]]]] = {}
-        logger.info(f"Initialized HybridSearchEngine with NVIDIA reranker (hosted, 0MB image overhead)")
 
     def _tokenize(self, text: str) -> List[str]:
         """Simple tokenization for BM25."""
