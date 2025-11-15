@@ -4,21 +4,25 @@ import asyncio
 import io
 from typing import List
 
-from sentence_transformers import SentenceTransformer
+from langchain_nvidia_ai_endpoints import NVIDIAEmbeddings
 from openai import OpenAI
 from pypdf import PdfReader
 
-from config import EMBEDDING_MODEL, OPENAI_API_KEY, ENABLE_CACHING
+from config import EMBEDDING_MODEL, OPENAI_API_KEY, NVIDIA_API_KEY, ENABLE_CACHING
 
-_e5 = SentenceTransformer("intfloat/e5-large")
+_nvidia_embeddings = NVIDIAEmbeddings(
+    model="nvidia/nv-embed-v1",
+    api_key=NVIDIA_API_KEY
+) if NVIDIA_API_KEY else None
 _openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 
 def _compute_embedding(text: str, model: str) -> List[float]:
     """Internal function to compute embedding without caching."""
-    if model == "multilingual-e5-large":
-        vec = _e5.encode([text])[0]  # Returns numpy array
-        return vec.astype("float32").tolist()
+    if model in {"nvidia-embed", "nvidia/nv-embed-v1", "nvidia/embedding-qa-4"}:
+        if _nvidia_embeddings is None:
+            raise ValueError("NVIDIA_API_KEY not configured for NVIDIA embeddings")
+        return _nvidia_embeddings.embed_query(text)
     if model == "text-embedding-3-small":
         if _openai_client is None:
             raise ValueError("OPENAI_API_KEY not configured for text-embedding-3-small")
@@ -48,7 +52,7 @@ def _get_cached_embedding(text: str, model: str):
 def get_embedding(text: str, model: str = None) -> List[float]:
     """
     Returns a list-of-floats embedding for `text` using:
-      • local E5-Large if model == "multilingual-e5-large"
+      • NVIDIA hosted embeddings if model contains "nvidia"
       • OpenAI text-embedding-3-small if model == "text-embedding-3-small"
 
     Uses caching if enabled in config.
@@ -81,9 +85,10 @@ def get_embeddings_batch(texts: List[str], model: str = None) -> List[List[float
     """
     model = model or EMBEDDING_MODEL
 
-    if model == "multilingual-e5-large":
-        vecs = _e5.encode(texts)
-        return [vec.astype("float32").tolist() for vec in vecs]
+    if model in {"nvidia-embed", "nvidia/nv-embed-v1", "nvidia/embedding-qa-4"}:
+        if _nvidia_embeddings is None:
+            raise ValueError("NVIDIA_API_KEY not configured for NVIDIA embeddings")
+        return _nvidia_embeddings.embed_documents(texts)
     if model == "text-embedding-3-small":
         if _openai_client is None:
             raise ValueError("OPENAI_API_KEY not configured for text-embedding-3-small")

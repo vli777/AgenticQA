@@ -32,24 +32,26 @@ if "*" not in CORS_ORIGINS:
             CORS_ORIGINS.append(origin)
 
 # Read the full model name from the environment, e.g.:
-#   EMBEDDING_MODEL="multilingual-e5-large"  or  "text-embedding-3-small"
+#   EMBEDDING_MODEL="nvidia-embed"  or  "text-embedding-3-small"
 _raw = os.getenv("EMBEDDING_MODEL", "").strip()
 
-# Recognize exactly these full model names; otherwise, default to None
-#  • "multilingual-e5-large" → local E5
+# Recognize exactly these full model names; otherwise, default to nvidia-embed
+#  • "nvidia-embed" → NVIDIA hosted embeddings (recommended, free tier)
+#  • "nvidia/nv-embed-v1" → NVIDIA nv-embed-v1 (high quality)
+#  • "nvidia/embedding-qa-4" → NVIDIA embedding-qa-4 (Q&A optimized)
 #  • "text-embedding-3-small" → OpenAI
-#  • "llama-text-embed-v2" → Pinecone’s LLaMA embedder
-# If you want to add more in future (e.g. “something-else”), just include them here.
+# If you want to add more in future, just include them here.
 _SUPPORTED = {
-    "multilingual-e5-large",
+    "nvidia-embed",
+    "nvidia/nv-embed-v1",
+    "nvidia/embedding-qa-4",
     "text-embedding-3-small",
-    "llama-text-embed-v2",
 }
 
 if _raw in _SUPPORTED:
     EMBEDDING_MODEL = _raw
 else:
-    EMBEDDING_MODEL = None
+    EMBEDDING_MODEL = "nvidia-embed"  # Default to NVIDIA hosted embeddings
 
 # Semantic tagging configuration (Hugging Face zero-shot + heuristics)
 ENABLE_SEMANTIC_TAGGING = os.getenv("ENABLE_SEMANTIC_TAGGING", "true").lower() == "true"
