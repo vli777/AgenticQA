@@ -1,0 +1,66 @@
+# Python cache and compiled files
+**/__pycache__/
+**/*.py[cod]
+**/*$py.class
+**/*.so
+
+# Virtual environments (CRITICAL - these are huge!)
+**/venv/
+**/env/
+**/ENV/
+**/.venv/
+**/.env/
+
+# Backend specific
+backend/venv/
+backend/.pytest_cache/
+backend/.ruff_cache/
+
+# Frontend specific
+frontend/node_modules/
+frontend/dist/
+
+# Distribution / packaging
+**/build/
+**/dist/
+**/*.egg-info/
+**/.eggs/
+
+# Testing
+**/.pytest_cache/
+**/.coverage
+**/htmlcov/
+**/.tox/
+
+# IDE
+.vscode/
+.idea/
+.claude/
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+**/.gitignore
+
+# Documentation
+**/*.md
+
+# Logs and databases
+**/*.log
+**/*.sqlite3
+
+# Environment files
+**/.env
+**/.env.example
+**/.env.local
+
+# Cache
+**/.cache/
+**/.ruff_cache/
+
+# OS files
+.DS_Store
+Thumbs.db
