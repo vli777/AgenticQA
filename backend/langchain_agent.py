@@ -171,33 +171,60 @@ def get_agent(namespace: str = "default", tools: list = None):
         return deduped or [question]
 
     def _compose_answer(question: str, evidence: str, chat_history: Optional[List[Dict[str, str]]] = None) -> str:
-        """Single-shot composition; no loops, no scratchpad."""
+        """Compose an answer that is strictly grounded in evidence."""
         history_section = ""
         if chat_history:
             history_lines = "\n".join(f"{item['role']}: {item['content']}" for item in chat_history)
             history_section = f"\n\nRecent conversation:\n{history_lines}\n"
-        # If we truly found nothing, answer gracefully
         if not evidence or evidence.strip().lower() in {"no results.", "no meaningful text chunks found."}:
-            prompt = (
-                "Question:\n"
-                f"{question}\n\n"
-                "Evidence:\n"
-                "(none)\n"
-                f"{history_section}\n"
-                "You found no evidence in the knowledge base. Reply concisely that no information is available."
-            )
-            return llm.invoke(prompt).content
+            return "The documents do not clearly specify this."
 
         prompt = (
-            "You are answering based ONLY on the evidence below. "
-            "If the evidence supports a clear answer, answer it directly and cite the sources in parentheses "
-            "using the bracketed provenance lines.\n\n"
+            "You answer questions using ONLY the provided evidence snippets.\n"
+            "Rules:\n"
+            "1. Do not use outside knowledge. Do not guess.\n"
+            "2. If the evidence does not clearly answer the question, reply exactly:\n"
+            '   \"The documents do not clearly specify this.\"\n'
+            "3. If evidence snippets disagree or the answer is ambiguous, use the fallback sentence.\n"
+            "4. For questions mentioning 'latest', 'current', 'most recent', or similar temporal cues, "
+            "   only answer if the evidence explicitly indicates ordering via dates or phrases like "
+            "   'currently', 'present', 'since'. Otherwise use the fallback sentence.\n"
+            "5. Keep answers to 1–2 sentences.\n"
+            "6. Do not treat headings, examples, or unlabeled lists as definitive facts unless explicitly stated.\n\n"
             f"Question:\n{question}\n"
             f"{history_section}\n"
-            f"Evidence snippets (each starts with a bracketed provenance like [source::section-X]):\n{evidence}\n\n"
-            "Write a concise answer in 1–2 sentences. If relevant, include the most helpful provenance lines in parentheses."
+            f"Evidence snippets:\n{evidence}\n\n"
+            "Following the rules, what is the best supported answer?"
         )
-        return llm.invoke(prompt).content
+        response = llm.invoke(prompt)
+        text = getattr(response, "content", "").strip()
+        if not text:
+            return "The documents do not clearly specify this."
+        return text
+
+    def _verify_answer(question: str, evidence: str, answer: str) -> str:
+        """Verify whether the answer is supported by the evidence."""
+        if not answer or answer.strip().lower() == "the documents do not clearly specify this.":
+            return "UNSUPPORTED"
+        prompt = (
+            "You are a strict fact checker.\n"
+            "Given a question, an answer, and evidence snippets, respond with exactly one word:\n"
+            "SUPPORTED, PARTIAL, or UNSUPPORTED.\n"
+            "- SUPPORTED: answer is explicitly stated or directly implied.\n"
+            "- PARTIAL: some parts match but important details are missing/unclear.\n"
+            "- UNSUPPORTED: answer goes beyond evidence or contradicts it.\n\n"
+            f"Question:\n{question}\n\n"
+            f"Answer:\n{answer}\n\n"
+            f"Evidence:\n{evidence}\n"
+        )
+        verdict_raw = llm.invoke(prompt).content.strip().upper()
+        if "UNSUPPORTED" in verdict_raw:
+            return "UNSUPPORTED"
+        if "PARTIAL" in verdict_raw:
+            return "PARTIAL"
+        if "SUPPORTED" in verdict_raw:
+            return "SUPPORTED"
+        return "PARTIAL"
 
     def _invoke(inputs: Dict[str, Any] | str) -> AgentOutput:
         # Normalize input
@@ -239,14 +266,21 @@ def get_agent(namespace: str = "default", tools: list = None):
 
         sources = _extract_sources(merged_evidence, limit=5)
 
-        # Phase 2: compose final answer (single LLM call)
-        final_answer = _compose_answer(question, merged_evidence, history)
+        # Phase 2: compose and verify answer
+        draft_answer = _compose_answer(question, merged_evidence, history)
+        verdict = _verify_answer(question, merged_evidence, draft_answer)
+
+        if verdict != "SUPPORTED":
+            final_answer = "The documents do not clearly specify this."
+        else:
+            final_answer = draft_answer
 
         if history:
             reasoning.append("Considered recent conversation context when forming query and answer.")
+        reasoning.append(f"Verification verdict: {verdict}.")
 
         return {
-            "answer": final_answer or "I couldn't find a definitive answer.",
+            "answer": final_answer or "The documents do not clearly specify this.",
             "reasoning": reasoning or ["Searched the knowledge base and summarized the best-matching evidence."],
             "sources": sources,
         }
