@@ -28,9 +28,10 @@
   ## Key Features
 
   - Upload PDF or TXT documents directly from the chat interface.
-  - Hybrid search (BM25 + vector) with cross-encoder re-ranking, Pinecone storage, and sentence-level chunking.
+  - Hybrid search (BM25 + vector) with NVIDIA hosted reranker, Pinecone storage, and sentence-level chunking.
+  - NVIDIA hosted embeddings and reranking for minimal Docker image size (~500MB vs 8GB+ with local models).
   - Per-topic conversational memory that automatically rewrites follow-up questions before retrieval.
-  - Strict answer synthesis: answers cite their sources, fall back to “The documents do not clearly specify this.” when
+  - Strict answer synthesis: answers cite their sources, fall back to "The documents do not clearly specify this." when
   evidence is thin, and include a verification verdict in the reasoning trail.
   - React chat frontend with agentic and plain RAG modes, plus namespace management and easy clearing of stored vectors.
 
@@ -54,9 +55,9 @@
 
   - Python 3.10+
   - Node.js 18+ (for the frontend)
-  - OpenAI API key (for embeddings or LLMs)
-  - NVIDIA API key (for Llama/Maverick inference)
+  - NVIDIA API key (REQUIRED - for hosted embeddings, reranking, and LLM inference. Free tier available!)
   - Pinecone API key and index
+  - OpenAI API key (OPTIONAL - only if using text-embedding-3-small instead of NVIDIA embeddings)
   - Railway or Render account (backend deployment) and Vercel (frontend) if you plan to host it
 
   ---
@@ -75,11 +76,11 @@
 
   Environment variables (set in .env or via your hosting platform):
 
-  OPENAI_API_KEY=...
-  NVIDIA_API_KEY=...
+  NVIDIA_API_KEY=...  # REQUIRED - Get free tier at build.nvidia.com
   PINECONE_API_KEY=...
   PINECONE_INDEX_NAME=agenticqa
-  EMBEDDING_MODEL=text-embedding-3-small  # or multilingual-e5-large, llama-text-embed-v2
+  EMBEDDING_MODEL=nvidia-embed  # Default. Options: nvidia-embed, nvidia/nv-embed-v1, nvidia/embedding-qa-4, text-embedding-3-small
+  OPENAI_API_KEY=...  # Optional - only needed if using text-embedding-3-small
 
   ### Frontend
 
