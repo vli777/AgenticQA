@@ -6,6 +6,7 @@ from rank_bm25 import BM25Okapi
 import re
 
 from langchain_nvidia_ai_endpoints import NVIDIARerank
+from langchain_core.documents import Document
 
 from logger import logger
 from pinecone_client import index
@@ -31,7 +32,7 @@ class HybridSearchEngine:
         self.reranker = None
         if NVIDIA_API_KEY:
             try:
-                model_name = reranker_model or "nv-rerank-qa-mistral-4b-v3"
+                model_name = reranker_model or "nv-rerank-qa-mistral-4b:1"
                 self.reranker = NVIDIARerank(
                     model=model_name,
                     api_key=NVIDIA_API_KEY
@@ -502,30 +503,48 @@ class HybridSearchEngine:
                 sorted_docs = sorted_docs[:top_k]
             return sorted_docs
 
-        # Prepare documents for reranking
-        doc_texts = [doc.get("metadata", {}).get("text", "") for doc in documents]
+        # Prepare documents for reranking - convert to LangChain Document objects
+        langchain_docs = [
+            Document(page_content=doc.get("metadata", {}).get("text", ""))
+            for doc in documents
+        ]
 
         # Use NVIDIA reranker
-        reranked_results = self.reranker.compress_documents(
-            query=query,
-            documents=doc_texts
-        )
+        try:
+            reranked_results = self.reranker.compress_documents(
+                query=query,
+                documents=langchain_docs
+            )
 
-        # Map reranked results back to original documents with scores
-        reranked_docs = []
-        for i, reranked_doc in enumerate(reranked_results):
-            if i < len(documents):
-                doc_copy = documents[i].copy()
-                doc_copy["rerank_score"] = getattr(reranked_doc, 'score', 1.0 - (i * 0.1))  # Fallback score
-                doc_copy["original_score"] = doc_copy.get("score", 0.0)
-                reranked_docs.append(doc_copy)
+            # Map reranked results back to original documents
+            # The reranker returns documents in relevance order with metadata
+            reranked_docs = []
+            for reranked_doc in reranked_results:
+                # Find matching original document by content
+                matching_doc = None
+                for orig_doc in documents:
+                    if orig_doc.get("metadata", {}).get("text", "") == reranked_doc.page_content:
+                        matching_doc = orig_doc.copy()
+                        break
 
-        if top_k:
-            reranked_docs = reranked_docs[:top_k]
+                if matching_doc:
+                    # Add rerank score from metadata if available
+                    matching_doc["rerank_score"] = getattr(reranked_doc.metadata, 'relevance_score', 1.0)
+                    matching_doc["original_score"] = matching_doc.get("score", 0.0)
+                    reranked_docs.append(matching_doc)
 
-        logger.info(f"NVIDIA reranker processed {len(documents)} documents, returning top {len(reranked_docs)}")
+            if top_k:
+                reranked_docs = reranked_docs[:top_k]
 
-        return reranked_docs
+            logger.info(f"NVIDIA reranker processed {len(documents)} documents, returning top {len(reranked_docs)}")
+            return reranked_docs
+
+        except Exception as e:
+            logger.error(f"NVIDIA reranker failed: {e}. Falling back to hybrid score sorting.")
+            sorted_docs = sorted(documents, key=lambda x: x.get("score", 0.0), reverse=True)
+            if top_k:
+                sorted_docs = sorted_docs[:top_k]
+            return sorted_docs
 
     async def hybrid_search_with_rerank(
         self,
