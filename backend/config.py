@@ -103,5 +103,5 @@ LLM_CACHE_SIZE = 500
 LLM_CACHE_TTL = 3600  # 1 hour
 
 # Chunking configuration (optimized for NVIDIA embeddings 512-token limit)
-CHUNK_SIZE = 1200  # Characters per chunk (~480 tokens, safely under 512 limit)
-CHUNK_OVERLAP = 240  # ~20% overlap to preserve context
+CHUNK_SIZE = 1000  # Characters per chunk (~500 tokens, safely under 512 limit)
+CHUNK_OVERLAP = 200  # ~20% overlap to preserve context
