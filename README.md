@@ -39,8 +39,8 @@
 
   ## Architecture in Brief
 
-  1. The frontend uploads files to the FastAPI backend. Documents are cleaned, chunked (2,000 characters with 20%
-  overlap), embedded, and upserted to Pinecone.
+  1. The frontend uploads files to the FastAPI backend. Documents are cleaned, chunked (1,000 characters with 20%
+  overlap, optimized for NVIDIA's 512-token limit), embedded, and upserted to Pinecone.
   2. Each chat turn carries a stable `conversation_id`. The backend memory manager assigns messages to topics,
   summarizes older turns, and supplies the relevant topic context.
   3. Before retrieval, the agent rewrites the user’s latest question into a standalone query using the current topic
@@ -79,7 +79,14 @@
   NVIDIA_API_KEY=...  # REQUIRED - Get free tier at build.nvidia.com
   PINECONE_API_KEY=...
   PINECONE_INDEX_NAME=agenticqa
-  EMBEDDING_MODEL=nvidia-embed  # Default. Options: nvidia-embed, nvidia/nv-embed-v1, nvidia/embedding-qa-4, text-embedding-3-small
+
+  # Embedding Model (auto-defaults to nvidia/nv-embedqa-e5-v5 if not specified)
+  # Options:
+  #   - nvidia/nv-embedqa-e5-v5 (1024-dim, DEFAULT, works with existing e5-large indexes)
+  #   - nvidia/nv-embed-v1 (4096-dim, requires new Pinecone index with 4096 dimensions)
+  #   - text-embedding-3-small (1536-dim, requires OpenAI key and 1536-dim index)
+  # EMBEDDING_MODEL=nvidia/nv-embedqa-e5-v5
+
   OPENAI_API_KEY=...  # Optional - only needed if using text-embedding-3-small
 
   ### Frontend
