@@ -57,9 +57,15 @@ frontend/dist/
 **/.env.example
 **/.env.local
 
-# Cache
+# Cache and model files
 **/.cache/
 **/.ruff_cache/
+**/.huggingface/
+**/models/
+**/*.bin
+**/*.safetensors
+**/*.onnx
+**/data/
 
 # OS files
 .DS_Store

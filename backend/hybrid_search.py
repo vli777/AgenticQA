@@ -3,12 +3,13 @@
 import numpy as np
 from typing import List, Dict, Any, Optional, Tuple, Set
 from rank_bm25 import BM25Okapi
-from sentence_transformers import CrossEncoder
 import re
+
+from langchain_nvidia_ai_endpoints import NVIDIARerank
 
 from logger import logger
 from pinecone_client import index
-from config import EMBEDDING_MODEL, CROSS_ENCODER_MODEL, SEMANTIC_TAG_BOOST
+from config import EMBEDDING_MODEL, SEMANTIC_TAG_BOOST, NVIDIA_API_KEY
 from utils import get_embedding
 from semantic_tags import infer_query_tags
 
@@ -16,21 +17,23 @@ from semantic_tags import infer_query_tags
 class HybridSearchEngine:
     """
     Hybrid search engine combining BM25 (sparse) and vector (dense) retrieval
-    with cross-encoder re-ranking.
+    with NVIDIA hosted reranker.
     """
 
-    def __init__(self, cross_encoder_model: str = None):
+    def __init__(self, reranker_model: str = None):
         """
         Initialize the hybrid search engine.
 
         Args:
-            cross_encoder_model: HuggingFace model name for cross-encoder re-ranking
-                                 (defaults to value from config)
+            reranker_model: NVIDIA reranker model (defaults to nvidia/rerank-qa-mistral-4b:1)
         """
-        model = cross_encoder_model or CROSS_ENCODER_MODEL
-        self.cross_encoder = CrossEncoder(model)
+        # Use NVIDIA hosted reranker (no local dependencies!)
+        self.reranker = NVIDIARerank(
+            model=reranker_model or "nvidia/rerank-qa-mistral-4b:1",
+            api_key=NVIDIA_API_KEY
+        ) if NVIDIA_API_KEY else None
         self.bm25_cache: Dict[str, Tuple[BM25Okapi, List[Dict[str, Any]]]] = {}
-        logger.info(f"Initialized HybridSearchEngine with cross-encoder: {model}")
+        logger.info(f"Initialized HybridSearchEngine with NVIDIA reranker (hosted, 0MB image overhead)")
 
     def _tokenize(self, text: str) -> List[str]:
         """Simple tokenization for BM25."""
@@ -72,10 +75,10 @@ class HybridSearchEngine:
 
             # Create a dummy vector for querying
             # Get dimension from config or use default
-            if EMBEDDING_MODEL == "multilingual-e5-large":
-                dimension = 1024
-            else:  # text-embedding-3-small or default
+            if EMBEDDING_MODEL == "text-embedding-3-small":
                 dimension = 1536
+            else:  # NVIDIA embeddings default to 1024
+                dimension = 1024
 
             dummy_vector = [0.0] * dimension
 
@@ -468,7 +471,7 @@ class HybridSearchEngine:
         top_k: Optional[int] = None
     ) -> List[Dict[str, Any]]:
         """
-        Re-rank documents using cross-encoder.
+        Re-rank documents using NVIDIA hosted reranker.
 
         Args:
             query: Search query
@@ -481,32 +484,38 @@ class HybridSearchEngine:
         if not documents:
             return []
 
-        # Prepare query-document pairs
-        pairs = []
-        for doc in documents:
-            text = doc.get("metadata", {}).get("text", "")
-            pairs.append([query, text])
+        # If reranker is not configured, fall back to hybrid score sorting
+        if not self.reranker:
+            logger.warning("NVIDIA reranker not configured, falling back to hybrid score sorting")
+            sorted_docs = sorted(documents, key=lambda x: x.get("score", 0.0), reverse=True)
+            if top_k:
+                sorted_docs = sorted_docs[:top_k]
+            return sorted_docs
 
-        # Get cross-encoder scores
-        scores = self.cross_encoder.predict(pairs)
+        # Prepare documents for reranking
+        doc_texts = [doc.get("metadata", {}).get("text", "") for doc in documents]
 
-        # Create re-ranked results
-        reranked = []
-        for doc, score in zip(documents, scores):
-            doc_copy = doc.copy()
-            doc_copy["rerank_score"] = float(score)
-            doc_copy["original_score"] = doc.get("score", 0.0)
-            reranked.append(doc_copy)
+        # Use NVIDIA reranker
+        reranked_results = self.reranker.compress_documents(
+            query=query,
+            documents=doc_texts
+        )
 
-        # Sort by rerank score
-        reranked.sort(key=lambda x: x["rerank_score"], reverse=True)
+        # Map reranked results back to original documents with scores
+        reranked_docs = []
+        for i, reranked_doc in enumerate(reranked_results):
+            if i < len(documents):
+                doc_copy = documents[i].copy()
+                doc_copy["rerank_score"] = getattr(reranked_doc, 'score', 1.0 - (i * 0.1))  # Fallback score
+                doc_copy["original_score"] = doc_copy.get("score", 0.0)
+                reranked_docs.append(doc_copy)
 
         if top_k:
-            reranked = reranked[:top_k]
+            reranked_docs = reranked_docs[:top_k]
 
-        logger.info(f"Re-ranked {len(documents)} documents, returning top {len(reranked)}")
+        logger.info(f"NVIDIA reranker processed {len(documents)} documents, returning top {len(reranked_docs)}")
 
-        return reranked
+        return reranked_docs
 
     async def hybrid_search_with_rerank(
         self,

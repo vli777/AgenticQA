@@ -136,7 +136,7 @@ def upsert_doc(
         chunk_id = f"{doc_id}_chunk_{i}"
         
         # Get embedding
-        if EMBEDDING_MODEL in {"multilingual-e5-large", "text-embedding-3-small"}:
+        if EMBEDDING_MODEL in {"nvidia-embed", "nvidia/nv-embed-v1", "nvidia/embedding-qa-4", "text-embedding-3-small"}:
             vec = get_embedding(chunk, EMBEDDING_MODEL)
             # Convert numpy → list if necessary
             if isinstance(vec, np.ndarray):
