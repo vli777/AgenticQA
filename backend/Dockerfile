@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Copy requirements first for better layer caching
-COPY requirements.txt .
+COPY backend/requirements.txt .
 
 # Install Python dependencies to a local directory
 RUN pip install --no-cache-dir --user -r requirements.txt
@@ -30,7 +30,7 @@ WORKDIR /app
 COPY --from=builder /root/.local /root/.local
 
 # Copy application code
-COPY . .
+COPY backend/ .
 
 # Make sure scripts in .local are usable
 ENV PATH=/root/.local/bin:$PATH
