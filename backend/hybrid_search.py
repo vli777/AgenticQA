@@ -331,32 +331,39 @@ class HybridSearchEngine:
         Returns:
             List of matches with scores
         """
-        if EMBEDDING_MODEL in {"multilingual-e5-large", "text-embedding-3-small"}:
-            q_embed = get_embedding(text=query, model=EMBEDDING_MODEL)
-            response = index.query(
-                vector=q_embed,
-                top_k=top_k,
-                include_metadata=True,
-                namespace=namespace
-            )
+        # Get embedding for query
+        q_embed = get_embedding(text=query, model=EMBEDDING_MODEL)
+
+        # Query Pinecone with the embedding vector
+        response = index.query(
+            vector=q_embed,
+            top_k=top_k,
+            include_metadata=True,
+            namespace=namespace
+        )
+
+        # Handle response (could be dict or object depending on SDK version)
+        if hasattr(response, 'matches'):
+            matches = response.matches or []
         else:
-            query_body = {"top_k": top_k, "inputs": {"text": query}}
-            if EMBEDDING_MODEL == "llama-text-embed-v2":
-                query_body["model"] = "llama-text-embed-v2"
-
-            response = index.search(
-                namespace=namespace,
-                query=query_body
-            )
-
-        matches = response.get("matches", [])
+            matches = response.get("matches", [])
         results = []
         for match in matches:
-            results.append({
-                "id": match.get("id"),
-                "score": match.get("score", 0.0),
-                "metadata": match.get("metadata", {})
-            })
+            # Handle both dict and object matches
+            if hasattr(match, 'id'):
+                # Object-style match (newer SDK)
+                results.append({
+                    "id": match.id,
+                    "score": getattr(match, 'score', 0.0),
+                    "metadata": getattr(match, 'metadata', {}) or {}
+                })
+            else:
+                # Dict-style match (older SDK)
+                results.append({
+                    "id": match.get("id"),
+                    "score": match.get("score", 0.0),
+                    "metadata": match.get("metadata", {})
+                })
 
         # If the user query implies semantic tags, fetch extra candidates that
         # share those tags (even if they don't rank highly by pure similarity).
