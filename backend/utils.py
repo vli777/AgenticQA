@@ -22,6 +22,11 @@ def _compute_embedding(text: str, model: str) -> List[float]:
     if model.startswith("nvidia/") or model == "nvidia-embed":
         if _nvidia_embeddings is None:
             raise ValueError("NVIDIA_API_KEY not configured for NVIDIA embeddings")
+        # NVIDIA models have a 512 token limit (~2000 chars)
+        # Truncate to be safe (rough estimate: 1 token ≈ 4 chars)
+        max_chars = 1800  # ~450 tokens, safely under 512 limit
+        if len(text) > max_chars:
+            text = text[:max_chars]
         return _nvidia_embeddings.embed_query(text)
     if model == "text-embedding-3-small":
         if _openai_client is None:
@@ -88,7 +93,10 @@ def get_embeddings_batch(texts: List[str], model: str = None) -> List[List[float
     if model.startswith("nvidia/") or model == "nvidia-embed":
         if _nvidia_embeddings is None:
             raise ValueError("NVIDIA_API_KEY not configured for NVIDIA embeddings")
-        return _nvidia_embeddings.embed_documents(texts)
+        # NVIDIA models have a 512 token limit - truncate texts to be safe
+        max_chars = 1800  # ~450 tokens, safely under 512 limit
+        truncated_texts = [text[:max_chars] if len(text) > max_chars else text for text in texts]
+        return _nvidia_embeddings.embed_documents(truncated_texts)
     if model == "text-embedding-3-small":
         if _openai_client is None:
             raise ValueError("OPENAI_API_KEY not configured for text-embedding-3-small")
