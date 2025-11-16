@@ -31,39 +31,10 @@ if "*" not in CORS_ORIGINS:
         if origin not in CORS_ORIGINS:
             CORS_ORIGINS.append(origin)
 
-# Read the full model name from the environment, e.g.:
-#   EMBEDDING_MODEL="nvidia-embed"  or  "text-embedding-3-small"
-_raw = os.getenv("EMBEDDING_MODEL", "").strip()
-
-# Recognize exactly these full model names; otherwise, default to nvidia/llama-3.2-nv-embedqa-1b-v2
-#  • "nvidia/llama-3.2-nv-embedqa-1b-v2" → NVIDIA Llama 3.2 embeddings (2048-dim, Q&A optimized, DEFAULT)
-#  • "nvidia/nv-embedqa-e5-v5" → NVIDIA E5 (1024-dim, legacy)
-#  • "nvidia/nv-embed-v1" → NVIDIA nv-embed-v1 (4096-dim, high quality)
-#  • "nvidia/embed-qa-4" → NVIDIA embedding-qa-4 (Q&A optimized)
-#  • "nvidia/embedding-qa-4" → NVIDIA embedding-qa-4 (Q&A optimized, aliased form)
-#  • "text-embedding-3-small" → OpenAI (1536-dim)
-# If you want to add more in future, just include them here.
-_SUPPORTED = {
-    "nvidia/llama-3.2-nv-embedqa-1b-v2",
-    "nvidia/nv-embedqa-e5-v5",
-    "nvidia/nv-embed-v1",
-    "nvidia/embed-qa-4",
-    "nvidia/embedding-qa-4",
-    "text-embedding-3-small",
-}
-
-_DEFAULT_EMBEDDING_MODEL = "nvidia/llama-3.2-nv-embedqa-1b-v2"
-_ALIASES = {
-    "llama-3.2-nv-embedqa-1b-v2": _DEFAULT_EMBEDDING_MODEL,
-    "nvidia-embed": _DEFAULT_EMBEDDING_MODEL,
-}
-
-if _raw in _ALIASES:
-    EMBEDDING_MODEL = _ALIASES[_raw]
-elif _raw in _SUPPORTED:
-    EMBEDDING_MODEL = _raw
-else:
-    EMBEDDING_MODEL = _DEFAULT_EMBEDDING_MODEL  # Default: 1024-dim, Q&A optimized
+# Embedding model is fixed so Pinecone dimensions remain consistent across deploys.
+# Update pinecone_client.py and redeploy with a freshly created index if you want
+# to experiment with a different model.
+EMBEDDING_MODEL = "nvidia/llama-3.2-nv-embedqa-1b-v2"
 
 # Semantic tagging configuration (Hugging Face zero-shot + heuristics)
 ENABLE_SEMANTIC_TAGGING = os.getenv("ENABLE_SEMANTIC_TAGGING", "true").lower() == "true"
