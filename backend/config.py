@@ -31,10 +31,13 @@ if "*" not in CORS_ORIGINS:
         if origin not in CORS_ORIGINS:
             CORS_ORIGINS.append(origin)
 
-# Embedding model is fixed so Pinecone dimensions remain consistent across deploys.
-# Update pinecone_client.py and redeploy with a freshly created index if you want
-# to experiment with a different model.
+# Embedding model configuration
 EMBEDDING_MODEL = "nvidia/llama-3.2-nv-embedqa-1b-v2"
+
+# Vector dimension (must match Pinecone index dimension)
+# Default: 2048 for nvidia/llama-3.2-nv-embedqa-1b-v2
+# Override via VECTOR_DIMENSION env var if using a different model
+VECTOR_DIMENSION = int(os.getenv("VECTOR_DIMENSION", "2048"))
 
 # Semantic tagging configuration (Hugging Face zero-shot + heuristics)
 ENABLE_SEMANTIC_TAGGING = os.getenv("ENABLE_SEMANTIC_TAGGING", "true").lower() == "true"
