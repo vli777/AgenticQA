@@ -7,7 +7,7 @@ from langchain_nvidia_ai_endpoints import NVIDIARerank
 from langchain_core.documents import Document
 
 from logger import logger
-from pinecone_client import index
+from pinecone_client import index, EMBED_DIM
 from config import EMBEDDING_MODEL, SEMANTIC_TAG_BOOST, NVIDIA_API_KEY
 from utils import get_embedding
 from semantic_tags import infer_query_tags
@@ -58,15 +58,10 @@ class HybridSearchEngine:
         if not tags:
             return []
 
-        # Match dimension logic from _fetch_all_documents
-        if EMBEDDING_MODEL == "text-embedding-3-small":
-            dimension = 1536
-        else:  # NVIDIA/Llama embeddings default to 1024
-            dimension = 1024
-
+        # Use EMBED_DIM from pinecone_client (controlled by VECTOR_DIMENSION env var)
         try:
             response = index.query(
-                vector=[0.0] * dimension,
+                vector=[0.0] * EMBED_DIM,
                 top_k=limit,
                 include_metadata=True,
                 namespace=namespace,
