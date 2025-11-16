@@ -1,6 +1,6 @@
 # backend/pinecone_client.py
 
-from pinecone import Pinecone
+from pinecone import Pinecone, ServerlessSpec
 
 from config import PINECONE_API_KEY, PINECONE_INDEX_NAME, EMBEDDING_MODEL
 
@@ -33,8 +33,7 @@ if not pc.has_index(PINECONE_INDEX_NAME):
     if EMBEDDING_MODEL in _PINECONE_HOSTED_MODELS:
         pc.create_index_for_model(
             name=PINECONE_INDEX_NAME,
-            cloud="aws",
-            region="us-east-1",
+            spec=ServerlessSpec(cloud="aws", region="us-east-1"),
             embed={
                 "model": EMBEDDING_MODEL,
                 "field_map": {"text": "text"},
@@ -45,8 +44,7 @@ if not pc.has_index(PINECONE_INDEX_NAME):
             name=PINECONE_INDEX_NAME,
             dimension=_get_dimension(EMBEDDING_MODEL),
             metric="cosine",
-            cloud="aws",
-            region="us-east-1",
+            spec=ServerlessSpec(cloud="aws", region="us-east-1"),
         )
 
 index = pc.Index(PINECONE_INDEX_NAME)
