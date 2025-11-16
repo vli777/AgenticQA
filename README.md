@@ -28,7 +28,7 @@
   ## Key Features
 
   - Upload PDF or TXT documents directly from the chat interface.
-  - NVIDIA-optimized retrieval (llama-3.2-nv-embedqa-1b-v2 + llama-3.2-nv-rerankqa-1b-v2) with 86.83% recall, Pinecone storage, and sentence-level chunking.
+  - NVIDIA-optimized retrieval (nvidia/llama-3.2-nv-embedqa-1b-v2 + nvidia/llama-3.2-nv-rerankqa-1b-v2) with 86.83% recall, Pinecone storage, and sentence-level chunking.
   - NVIDIA hosted embeddings and reranking for minimal Docker image size (~500MB vs 8GB+ with local models).
   - Per-topic conversational memory that automatically rewrites follow-up questions before retrieval.
   - Strict answer synthesis: answers cite their sources, fall back to "The documents do not clearly specify this." when
@@ -45,7 +45,7 @@
   summarizes older turns, and supplies the relevant topic context.
   3. Before retrieval, the agent rewrites the user's latest question into a standalone query using the current topic
   history.
-  4. Vector search (llama-3.2-nv-embedqa-1b-v2) returns 60 candidate snippets, which are re-ranked by NVIDIA's reranker
+  4. Vector search (nvidia/llama-3.2-nv-embedqa-1b-v2) returns 60 candidate snippets, which are re-ranked by NVIDIA's reranker
   (llama-3.2-nv-rerankqa-1b-v2) for 86.83% recall. The agent drafts an answer using only those snippets, verifies it,
   and cites the provenance tags.
   5. The answer, reasoning steps, verification verdict, and sources are returned to the client.
@@ -81,13 +81,13 @@
   PINECONE_API_KEY=...
   PINECONE_INDEX_NAME=agenticqa
 
-  # Embedding Model (auto-defaults to llama-3.2-nv-embedqa-1b-v2 if not specified)
+  # Embedding Model (auto-defaults to nvidia/llama-3.2-nv-embedqa-1b-v2 if not specified)
   # Options:
-  #   - llama-3.2-nv-embedqa-1b-v2 (1024-dim, DEFAULT, Q&A optimized, recommended)
+  #   - nvidia/llama-3.2-nv-embedqa-1b-v2 (1024-dim, DEFAULT, Q&A optimized, recommended)
   #   - nvidia/nv-embedqa-e5-v5 (1024-dim, legacy, works with existing e5-large indexes)
   #   - nvidia/nv-embed-v1 (4096-dim, requires new Pinecone index with 4096 dimensions)
   #   - text-embedding-3-small (1536-dim, requires OpenAI key and 1536-dim index)
-  # EMBEDDING_MODEL=llama-3.2-nv-embedqa-1b-v2
+  # EMBEDDING_MODEL=nvidia/llama-3.2-nv-embedqa-1b-v2
 
   OPENAI_API_KEY=...  # Optional - only needed if using text-embedding-3-small
 

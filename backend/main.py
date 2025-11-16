@@ -1,5 +1,7 @@
 # backend/main.py
 
+import asyncio
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -8,6 +10,7 @@ from utils import get_embedding
 from routes.upload import router as upload_router
 from routes.qa import router as qa_router
 from routes.debug_summary import router as debug_summary_router
+from logger import logger
 
 app = FastAPI(debug=DEBUG)
 app.add_middleware(
@@ -25,12 +28,22 @@ if DEBUG:
     from routes.debug import router as debug_router
     app.include_router(debug_router, prefix="/debug")
 
-embedding = None
-if EMBEDDING_MODEL:
-    embedding = get_embedding(
-        text="Embedding model set to " + EMBEDDING_MODEL,
-        model=EMBEDDING_MODEL
-    )
+
+@app.on_event("startup")
+async def init_embeddings():
+    if not EMBEDDING_MODEL:
+        logger.info("No embedding model configured; skipping embedding init")
+        return
+
+    try:
+        await asyncio.to_thread(
+            get_embedding,
+            text="Embedding model set to " + EMBEDDING_MODEL,
+            model=EMBEDDING_MODEL,
+        )
+        logger.info("Embedding model initialized: %s", EMBEDDING_MODEL)
+    except Exception:
+        logger.exception("Embedding warm-up failed; requests will compute on demand")
     
 @app.get("/")
 def root():
