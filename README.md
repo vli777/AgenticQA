@@ -61,6 +61,11 @@
   - OpenAI API key (OPTIONAL - only if using text-embedding-3-small instead of NVIDIA embeddings)
   - Railway or Render account (backend deployment) and Vercel (frontend) if you plan to host it
 
+  ### Pinecone Index Setup
+
+  - Create the index referenced by `PINECONE_INDEX_NAME` with `dimension=2048`, `metric=cosine`, and the AWS us-east-1 serverless spec.
+  - If you change embedding models, drop/recreate the index before redeploying so Pinecone's vector dimension matches.
+
   ---
 
   ## Getting Started
@@ -79,15 +84,7 @@
 
   NVIDIA_API_KEY=...  # REQUIRED - Get free tier at build.nvidia.com
   PINECONE_API_KEY=...
-  PINECONE_INDEX_NAME=agenticqa
-
-  # Embedding Model (auto-defaults to nvidia/llama-3.2-nv-embedqa-1b-v2 if not specified)
-  # Options:
-  #   - nvidia/llama-3.2-nv-embedqa-1b-v2 (2048-dim, DEFAULT, Q&A optimized, recommended)
-  #   - nvidia/nv-embedqa-e5-v5 (1024-dim, legacy, works with existing e5-large indexes)
-  #   - nvidia/nv-embed-v1 (4096-dim, requires new Pinecone index with 4096 dimensions)
-  #   - text-embedding-3-small (1536-dim, requires OpenAI key and 1536-dim index)
-  # EMBEDDING_MODEL=nvidia/llama-3.2-nv-embedqa-1b-v2
+  PINECONE_INDEX_NAME=agenticqa  # Must exist as a 2048-dimension index
 
   OPENAI_API_KEY=...  # Optional - only needed if using text-embedding-3-small
 
