@@ -6,7 +6,7 @@ from datetime import datetime
 
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
 from logger import logger
-from pinecone_client import index
+from pinecone_client import index, EMBED_DIM
 from config import EMBEDDING_MODEL
 from utils import get_embedding
 
@@ -230,12 +230,8 @@ def list_documents_in_namespace(namespace: str = "default", limit: int = 100) ->
     """
     try:
         # Query for all summary entries using a dummy vector
-        if EMBEDDING_MODEL == "text-embedding-3-small":
-            dimension = 1536
-        else:
-            dimension = 1024
-
-        dummy_vector = [0.0] * dimension
+        # Use EMBED_DIM from pinecone_client (controlled by VECTOR_DIMENSION env var)
+        dummy_vector = [0.0] * EMBED_DIM
 
         response = index.query(
             vector=dummy_vector,
