@@ -7,7 +7,7 @@ from config import PINECONE_API_KEY, PINECONE_INDEX_NAME, EMBEDDING_MODEL
 _DEFAULT_DIMENSION = 1536
 _MODEL_DIMENSIONS = {
     "text-embedding-3-small": 1536,
-    "nvidia/llama-3.2-nv-embedqa-1b-v2": 1024,
+    "nvidia/llama-3.2-nv-embedqa-1b-v2": 2048,
     "nvidia/nv-embedqa-e5-v5": 1024,
     "nvidia/nv-embed-v1": 4096,
     "nvidia/embed-qa-4": 1024,

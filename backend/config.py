@@ -36,7 +36,7 @@ if "*" not in CORS_ORIGINS:
 _raw = os.getenv("EMBEDDING_MODEL", "").strip()
 
 # Recognize exactly these full model names; otherwise, default to nvidia/llama-3.2-nv-embedqa-1b-v2
-#  • "nvidia/llama-3.2-nv-embedqa-1b-v2" → NVIDIA Llama 3.2 embeddings (1024-dim, Q&A optimized, DEFAULT)
+#  • "nvidia/llama-3.2-nv-embedqa-1b-v2" → NVIDIA Llama 3.2 embeddings (2048-dim, Q&A optimized, DEFAULT)
 #  • "nvidia/nv-embedqa-e5-v5" → NVIDIA E5 (1024-dim, legacy)
 #  • "nvidia/nv-embed-v1" → NVIDIA nv-embed-v1 (4096-dim, high quality)
 #  • "nvidia/embed-qa-4" → NVIDIA embedding-qa-4 (Q&A optimized)
