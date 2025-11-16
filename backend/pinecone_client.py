@@ -4,27 +4,49 @@ from pinecone import Pinecone
 
 from config import PINECONE_API_KEY, PINECONE_INDEX_NAME, EMBEDDING_MODEL
 
+_DEFAULT_DIMENSION = 1536
+_MODEL_DIMENSIONS = {
+    "text-embedding-3-small": 1536,
+    "nvidia/llama-3.2-nv-embedqa-1b-v2": 1024,
+    "nvidia/nv-embedqa-e5-v5": 1024,
+    "nvidia/nv-embed-v1": 4096,
+    "nvidia/embed-qa-4": 1024,
+    "nvidia/embedding-qa-4": 1024,
+    "nvidia-embed": 1024,
+}
+_PINECONE_HOSTED_MODELS = {
+    "llama-text-embed-v2",
+    "multilingual-e5-large",
+    "pinecone-sparse-english-v0",
+}
+
+
+def _get_dimension(model_name: str | None) -> int:
+    if not model_name:
+        return _DEFAULT_DIMENSION
+    return _MODEL_DIMENSIONS.get(model_name, _DEFAULT_DIMENSION)
+
+
 pc = Pinecone(api_key=PINECONE_API_KEY)
 
 if not pc.has_index(PINECONE_INDEX_NAME):
-    if EMBEDDING_MODEL:
+    if EMBEDDING_MODEL in _PINECONE_HOSTED_MODELS:
         pc.create_index_for_model(
             name=PINECONE_INDEX_NAME,
             cloud="aws",
             region="us-east-1",
             embed={
                 "model": EMBEDDING_MODEL,
-                "field_map": {"text": "text"}
-            }
+                "field_map": {"text": "text"},
+            },
         )
     else:
-        # No EMBEDDING_MODEL -> create a vanilla index so Pinecone’s built-in (text-embedding-3-small) is used        
         pc.create_index(
             name=PINECONE_INDEX_NAME,
-            dimension=1536,    # default dimension for text-embedding-3-small
+            dimension=_get_dimension(EMBEDDING_MODEL),
             metric="cosine",
             cloud="aws",
-            region="us-east-1"
+            region="us-east-1",
         )
 
 index = pc.Index(PINECONE_INDEX_NAME)
@@ -35,12 +57,7 @@ try:
     index_dim = index_stats.get("dimension")
 
     # Determine expected dimension based on embedding model
-    if EMBEDDING_MODEL == "text-embedding-3-small":
-        expected_dim = 1536
-    elif EMBEDDING_MODEL and (EMBEDDING_MODEL.startswith("nvidia/") or EMBEDDING_MODEL.startswith("llama")):
-        expected_dim = 1024
-    else:
-        expected_dim = 1536  # Default
+    expected_dim = _get_dimension(EMBEDDING_MODEL)
 
     if index_dim and index_dim != expected_dim:
         raise RuntimeError(
