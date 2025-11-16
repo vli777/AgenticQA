@@ -28,7 +28,7 @@
   ## Key Features
 
   - Upload PDF or TXT documents directly from the chat interface.
-  - NVIDIA-optimized retrieval (nvidia/llama-3.2-nv-embedqa-1b-v2 + nvidia/llama-3.2-nv-rerankqa-1b-v2) with 86.83% recall, Pinecone storage, and sentence-level chunking.
+  - NVIDIA-optimized retrieval (nvidia/llama-3.2-nv-embedqa-1b-v2 + nvidia/llama-3.2-nv-rerankqa-1b-v2, 2048-dim embeddings) with 86.83% recall, Pinecone storage, and sentence-level chunking.
   - NVIDIA hosted embeddings and reranking for minimal Docker image size (~500MB vs 8GB+ with local models).
   - Per-topic conversational memory that automatically rewrites follow-up questions before retrieval.
   - Strict answer synthesis: answers cite their sources, fall back to "The documents do not clearly specify this." when
@@ -83,7 +83,7 @@
 
   # Embedding Model (auto-defaults to nvidia/llama-3.2-nv-embedqa-1b-v2 if not specified)
   # Options:
-  #   - nvidia/llama-3.2-nv-embedqa-1b-v2 (1024-dim, DEFAULT, Q&A optimized, recommended)
+  #   - nvidia/llama-3.2-nv-embedqa-1b-v2 (2048-dim, DEFAULT, Q&A optimized, recommended)
   #   - nvidia/nv-embedqa-e5-v5 (1024-dim, legacy, works with existing e5-large indexes)
   #   - nvidia/nv-embed-v1 (4096-dim, requires new Pinecone index with 4096 dimensions)
   #   - text-embedding-3-small (1536-dim, requires OpenAI key and 1536-dim index)
