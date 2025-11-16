@@ -14,6 +14,7 @@ else:
     clear_all_caches = None
 
 router = APIRouter()
+namespace_router = APIRouter()
 
 @router.get("/indexes")
 def list_indexes():
@@ -40,10 +41,9 @@ def list_indexes():
     return {"indexes": cleaned}
 
 
-@router.delete("/namespace/{namespace}")
-async def clear_namespace(namespace: str):
+async def _clear_namespace(namespace: str) -> dict:
     """Delete all vectors within a Pinecone namespace and reset caches."""
-    logger.info("Clearing namespace '%s' via debug endpoint", namespace)
+    logger.info("Clearing namespace '%s'", namespace)
 
     vectors_deleted = True
     delete_warning = None
@@ -75,3 +75,8 @@ async def clear_namespace(namespace: str):
     if delete_warning:
         payload["warning"] = delete_warning
     return payload
+
+
+@namespace_router.delete("/namespace/{namespace}")
+async def clear_namespace(namespace: str):
+    return await _clear_namespace(namespace)
