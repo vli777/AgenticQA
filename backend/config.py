@@ -39,28 +39,19 @@ EMBEDDING_MODEL = "nvidia/llama-3.2-nv-embedqa-1b-v2"
 # Override via VECTOR_DIMENSION env var if using a different model
 VECTOR_DIMENSION = int(os.getenv("VECTOR_DIMENSION", "2048"))
 
-# Semantic tagging configuration (Hugging Face zero-shot + heuristics)
-ENABLE_SEMANTIC_TAGGING = os.getenv("ENABLE_SEMANTIC_TAGGING", "true").lower() == "true"
-HUGGINGFACE_ZS_MODEL = os.getenv("HUGGINGFACE_ZS_MODEL", "facebook/bart-large-mnli")
+# Semantic tagging configuration (always enabled)
+# LLM-based tag extraction (always on - domain-agnostic)
+LLM_TAG_MODEL = os.getenv("LLM_TAG_MODEL", "meta/llama-3.3-70b-instruct")
+LLM_TAG_COUNT = int(os.getenv("LLM_TAG_COUNT", "5"))  # Number of tags to extract per chunk
 
+# Zero-shot classification (optional fallback - only used if SEMANTIC_TAG_LABELS defined)
+HUGGINGFACE_ZS_MODEL = os.getenv("HUGGINGFACE_ZS_MODEL", "facebook/bart-large-mnli")
 _semantic_labels_raw = os.getenv("SEMANTIC_TAG_LABELS")
 if _semantic_labels_raw:
     SEMANTIC_TAG_LABELS = [label.strip().lower() for label in _semantic_labels_raw.split(",") if label.strip()]
 else:
-    SEMANTIC_TAG_LABELS = [
-        "python",
-        "java",
-        "javascript",
-        "typescript",
-        "c++",
-        "c#",
-        "go",
-        "rust",
-        "sql",
-        "data engineering",
-        "machine learning",
-        "devops",
-    ]
+    # Empty by default - relies purely on LLM extraction (domain-agnostic)
+    SEMANTIC_TAG_LABELS = []
 
 SEMANTIC_TAG_THRESHOLD = float(os.getenv("SEMANTIC_TAG_THRESHOLD", "0.6"))
 SEMANTIC_TAG_BOOST = float(os.getenv("SEMANTIC_TAG_BOOST", "0.2"))
