@@ -4,7 +4,7 @@ import re
 import json
 from typing import List, Any, Dict, TypedDict, Optional
 
-from langchain.tools import Tool
+from langchain_core.tools import Tool
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
 from langchain_core.runnables import RunnableLambda
 
