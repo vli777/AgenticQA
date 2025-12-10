@@ -14,6 +14,8 @@ from functools import lru_cache
 from typing import List, Optional, Set, Tuple
 import json
 
+from pydantic import BaseModel, Field
+
 try:
     from huggingface_hub import InferenceClient
 except ImportError:
@@ -42,6 +44,17 @@ from config import (
 from logger import logger
 
 _DEFAULT_LABELS = set(SEMANTIC_TAG_LABELS or [])
+
+
+# ---------------------------
+# Pydantic Model for Structured Output
+# ---------------------------
+
+class TagList(BaseModel):
+    """Structured output for semantic tag extraction."""
+    tags: List[str] = Field(
+        description="Array of lowercase keyword strings representing key concepts, topics, technologies, domains, or categories mentioned in the text"
+    )
 
 
 def _sanitize_text(sample: str, limit: int = 750) -> str:
@@ -88,7 +101,7 @@ def _hf_client() -> Optional[InferenceClient]:
 
 def _llm_extract_tags(text: str) -> Set[str]:
     """
-    Extract semantic tags using LLM (always enabled, domain-agnostic).
+    Extract semantic tags using LLM with Pydantic structured output (always enabled, domain-agnostic).
     Lets the LLM determine relevant keywords/topics from any content.
     """
     client = _llm_client()
@@ -100,47 +113,49 @@ def _llm_extract_tags(text: str) -> Set[str]:
         return set()
 
     prompt = f"""Extract {LLM_TAG_COUNT} relevant keywords or topic tags from the following text.
-Return ONLY a JSON array of lowercase strings, nothing else.
 Focus on: key concepts, topics, technologies, domains, or categories mentioned.
 
-Text: {sample}
-
-JSON array of tags:"""
+Text: {sample}"""
 
     try:
-        # Handle ChatNVIDIA (LangChain)
-        if hasattr(client, "invoke"):
-            response = client.invoke(prompt)
-            content = response.content if hasattr(response, "content") else str(response)
-        # Handle OpenAI
+        # Handle ChatNVIDIA (LangChain) - supports with_structured_output
+        if hasattr(client, "invoke") and hasattr(client, "with_structured_output"):
+            structured_llm = client.with_structured_output(TagList)
+            response = structured_llm.invoke(prompt)
+            return {tag.lower().strip() for tag in response.tags if tag.strip()}
+
+        # Handle OpenAI - use native structured output via response_format
         elif hasattr(client, "chat"):
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.0,
-            )
-            content = response.choices[0].message.content
+            try:
+                # Try OpenAI's native structured output (requires newer SDK)
+                response = client.beta.chat.completions.parse(
+                    model="gpt-5.1",
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.0,
+                    response_format=TagList,
+                )
+                parsed = response.choices[0].message.parsed
+                if parsed:
+                    return {tag.lower().strip() for tag in parsed.tags if tag.strip()}
+            except (AttributeError, Exception) as e:
+                # Fallback to JSON mode if structured output not available
+                logger.info("OpenAI structured output not available, using JSON mode: %s", e)
+                response = client.chat.completions.create(
+                    model="gpt-5.1",
+                    messages=[{"role": "user", "content": prompt + "\n\nReturn ONLY a JSON array of lowercase strings."}],
+                    temperature=0.0,
+                    response_format={"type": "json_object"}
+                )
+                content = response.choices[0].message.content
+                parsed = json.loads(content)
+                if "tags" in parsed:
+                    return {tag.lower().strip() for tag in parsed["tags"] if isinstance(tag, str) and tag.strip()}
         else:
             logger.warning("Unknown LLM client type: %s", type(client))
             return set()
 
-        # Parse JSON response
-        content = content.strip()
-        # Handle markdown code blocks
-        if content.startswith("```"):
-            lines = content.split("\n")
-            content = "\n".join(lines[1:-1]) if len(lines) > 2 else content
-
-        tags = json.loads(content)
-        if isinstance(tags, list):
-            return {tag.lower().strip() for tag in tags if isinstance(tag, str) and tag.strip()}
-
-        logger.warning("LLM returned non-list response: %s", tags)
         return set()
 
-    except json.JSONDecodeError as exc:
-        logger.warning("Failed to parse LLM tag extraction response: %s", exc)
-        return set()
     except Exception as exc:  # pragma: no cover
         logger.warning("LLM tag extraction failed: %s", exc)
         return set()
