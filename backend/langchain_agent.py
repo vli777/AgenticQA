@@ -2,8 +2,9 @@
 
 import re
 import json
-from typing import List, Any, Dict, TypedDict, Optional
+from typing import List, Any, Dict, TypedDict, Optional, Literal
 
+from pydantic import BaseModel, Field
 from langchain_core.tools import Tool
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
 from langchain_core.runnables import RunnableLambda
@@ -30,6 +31,28 @@ class AgentOutput(TypedDict):
     answer: str
     reasoning: List[str]
     sources: Optional[List[str]]
+
+
+# ---------------------------
+# Pydantic Models for Structured Outputs
+# ---------------------------
+
+class QueryPlan(BaseModel):
+    """Structured output for query planning with multiple search variations."""
+    queries: List[str] = Field(
+        description="List of concise keyword variations for document search (synonyms, related terminology, abbreviations). Each variation should be under 20 words."
+    )
+
+
+class VerificationVerdict(BaseModel):
+    """Structured output for answer verification against evidence."""
+    verdict: Literal["SUPPORTED", "PARTIAL", "UNSUPPORTED"] = Field(
+        description=(
+            "SUPPORTED: answer is explicitly stated or directly implied in evidence. "
+            "PARTIAL: some parts match but important details are missing/unclear. "
+            "UNSUPPORTED: answer goes beyond evidence, contradicts it, or lacks access."
+        )
+    )
 
 
 # ---------------------------
@@ -215,31 +238,25 @@ def get_agent(namespace: str = "default", tools: list = None):
         """
         Ask the LLM to propose related keyword variations so search can cover synonyms/concepts.
         Returns the original query plus up to (max_variations-1) alternates.
+        Uses Pydantic structured output for reliable parsing.
         """
         prompt = (
-            "You are a query planner for document search. Given a user's question, list concise keyword\n"
-            "variations that capture different angles (synonyms, related terminology, abbreviations).\n"
-            "Return STRICT JSON such as {\"queries\": [\"variation 1\", \"variation 2\"]}. "
+            "You are a query planner for document search. Given a user's question, list concise keyword "
+            "variations that capture different angles (synonyms, related terminology, abbreviations). "
             "Keep each variation under 20 words and prioritize distinct wording.\n\n"
             f"Question: {question}"
         )
 
         planned_variations: List[str] = []
         try:
-            response = llm.invoke(prompt)
-            raw = (response.content or "").strip()
-            parsed = json.loads(raw)
-            if isinstance(parsed, dict):
-                planned_variations = parsed.get("queries") or []
-            elif isinstance(parsed, list):
-                planned_variations = parsed
-        except Exception:
-            # Fall back to a simple heuristic rephrase if parsing fails
-            q2 = re.sub(r"\b(knows?|know|knowledge of)\b", "skills with", question, flags=re.I)
-            if q2 != question:
-                planned_variations = [q2]
-            else:
-                planned_variations = [f"{question} skills resume profile"]
+            # Use structured output with Pydantic model
+            structured_llm = llm.with_structured_output(QueryPlan)
+            response = structured_llm.invoke(prompt)
+            planned_variations = response.queries
+        except Exception as e:
+            # If structured output fails, fall back to original query only
+            logger.warning(f"Query planning failed with structured output: {e}, using original query only")
+            planned_variations = []
 
         deduped: List[str] = []
         seen = set()
@@ -289,7 +306,10 @@ def get_agent(namespace: str = "default", tools: list = None):
         return text
 
     def _verify_answer(question: str, evidence: str, answer: str) -> str:
-        """Verify whether the answer is supported by the evidence."""
+        """
+        Verify whether the answer is supported by the evidence.
+        Uses Pydantic structured output for reliable verdict parsing.
+        """
         if not answer:
             return "UNSUPPORTED"
 
@@ -315,24 +335,22 @@ def get_agent(namespace: str = "default", tools: list = None):
             return "UNSUPPORTED"
 
         prompt = (
-            "You are a strict fact checker.\n"
-            "Given a question, an answer, and evidence snippets, respond with exactly one word:\n"
-            "SUPPORTED, PARTIAL, or UNSUPPORTED.\n"
-            "- SUPPORTED: answer is explicitly stated or directly implied.\n"
-            "- PARTIAL: some parts match but important details are missing/unclear.\n"
-            "- UNSUPPORTED: answer goes beyond evidence, contradicts it, or just says it lacks access.\n\n"
+            "You are a strict fact checker. "
+            "Given a question, an answer, and evidence snippets, determine the verification verdict.\n\n"
             f"Question:\n{question}\n\n"
             f"Answer:\n{answer}\n\n"
             f"Evidence:\n{evidence}\n"
         )
-        verdict_raw = llm.invoke(prompt).content.strip().upper()
-        if "UNSUPPORTED" in verdict_raw:
-            return "UNSUPPORTED"
-        if "PARTIAL" in verdict_raw:
+
+        try:
+            # Use structured output with Pydantic model
+            structured_llm = llm.with_structured_output(VerificationVerdict)
+            response = structured_llm.invoke(prompt)
+            return response.verdict
+        except Exception as e:
+            # Fallback to PARTIAL if structured output fails
+            logger.warning(f"Verification failed with structured output: {e}, defaulting to PARTIAL")
             return "PARTIAL"
-        if "SUPPORTED" in verdict_raw:
-            return "SUPPORTED"
-        return "PARTIAL"
 
     def _invoke(inputs: Dict[str, Any] | str) -> AgentOutput:
         # Normalize input
@@ -420,52 +438,6 @@ def get_agent(namespace: str = "default", tools: list = None):
                 else:
                     logger.warning("No documents found in namespace for summary")
                     # Fall through to semantic search
-
-        # Skill-check fast path for "Does X know/have Y?" questions
-        import re
-        skill_match = re.search(r'does\s+(\w+)\s+(know|have\s+(?:experience\s+(?:with|in)|skills?\s+(?:in|with))?)\s+(.+?)\??$', question_lower)
-        if skill_match:
-            skill_term = skill_match.group(3).strip()
-            logger.info(f"Detected skill check question for: '{skill_term}'")
-            reasoning.append(f"Detected skill/knowledge query about '{skill_term}'")
-
-            # Search summaries for the skill/technology
-            summary_results = search_summaries(query=skill_term, namespace=namespace, top_k=1)
-
-            if summary_results:
-                summary = summary_results[0]["summary"]
-                source = summary_results[0]["source"]
-
-                # Check key_concepts and topics for the skill
-                found = False
-                for concept in summary.get("key_concepts", []):
-                    if skill_term.lower() in concept.get("concept", "").lower():
-                        found = True
-                        context = concept.get("context", "")
-                        reasoning.append(f"Found '{skill_term}' in key concepts: {context}")
-                        final_answer = f"Yes. The document mentions {skill_term}"
-                        if context:
-                            final_answer += f": {context}"
-                        final_answer += "."
-                        break
-
-                if not found:
-                    for topic in summary.get("topics", []):
-                        if skill_term.lower() in topic.lower():
-                            found = True
-                            reasoning.append(f"Found '{skill_term}' in topics")
-                            final_answer = f"Yes. The document lists {skill_term} as a topic."
-                            break
-
-                if found:
-                    return {
-                        "answer": final_answer,
-                        "reasoning": reasoning,
-                        "sources": [f"[{source}]"]
-                    }
-                else:
-                    # Not found in summary, but let's fall through to full search
-                    logger.info(f"'{skill_term}' not found in summary, proceeding with full search")
 
         # DOCUMENT-FIRST STRATEGY:
         # 1. Search summaries to identify relevant documents
