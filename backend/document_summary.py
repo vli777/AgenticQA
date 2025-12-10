@@ -1,9 +1,10 @@
 # backend/document_summary.py
 
 import json
-from typing import List, Dict, Any, Set, Optional
+from typing import List, Dict, Any, Set, Optional, Literal
 from datetime import datetime
 
+from pydantic import BaseModel, Field
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
 from logger import logger
 from pinecone_client import index, EMBED_DIM
@@ -11,6 +12,42 @@ from config import EMBEDDING_MODEL
 from utils import get_embedding
 
 llm = ChatNVIDIA(model="meta/llama-4-maverick-17b-128e-instruct", temperature=0.0)
+
+
+# ---------------------------
+# Pydantic Models for Structured Output
+# ---------------------------
+
+class KeyConcept(BaseModel):
+    """A key concept or important term from the document."""
+    concept: str = Field(description="Important term, technology, name, idea, or skill")
+    context: str = Field(description="Brief context about how it's used or mentioned")
+    chunk_refs: List[int] = Field(description="Reference to [CHUNK_X] numbers where information was found")
+
+
+class KeyFact(BaseModel):
+    """An important statement or claim from the document."""
+    fact: str = Field(description="Important statement or claim")
+    chunk_refs: List[int] = Field(description="Reference to [CHUNK_X] numbers where information was found")
+
+
+class DocumentExtraction(BaseModel):
+    """Structured extraction of key information from a document."""
+    document_type: Literal["resume", "research_paper", "technical_doc", "article", "business_doc", "other"] = Field(
+        description="Type of document"
+    )
+    primary_subject: str = Field(
+        description="Brief description of what this document is about"
+    )
+    key_concepts: List[KeyConcept] = Field(
+        description="List of important concepts mentioned (skills, technologies, methods, people, companies, theories, tools, etc.)"
+    )
+    key_facts: List[KeyFact] = Field(
+        description="List of 5-15 most important facts that answer potential questions"
+    )
+    topics: List[str] = Field(
+        description="List of 3-5 main topics or themes"
+    )
 
 
 def extract_structured_summary(
@@ -43,25 +80,12 @@ def extract_structured_summary(
         chunk_map[i] = chunk
 
     # Structured extraction prompt (generic, works for any document type)
-    extraction_prompt = f"""Extract key information from this document in strict JSON format.
+    extraction_prompt = f"""Extract key information from this document.
 
 Document: {source}
 
 Text:
 {combined_text}
-
-Extract the following and return ONLY valid JSON:
-{{
-  "document_type": "resume|research_paper|technical_doc|article|business_doc|other",
-  "primary_subject": "brief description of what this document is about",
-  "key_concepts": [
-    {{"concept": "important term/technology/name/idea", "context": "brief context", "chunk_refs": [0, 1]}}
-  ],
-  "key_facts": [
-    {{"fact": "important statement or claim", "chunk_refs": [0]}}
-  ],
-  "topics": ["topic1", "topic2"]
-}}
 
 Important:
 - chunk_refs should reference the [CHUNK_X] numbers where information was found
@@ -70,21 +94,16 @@ Important:
 - For each concept, provide brief context about how it's used or mentioned
 - Identify 3-5 main topics/themes
 - Be comprehensive and specific
-- This should work for ANY document type (resumes, papers, articles, documentation, etc.)
-
-Return ONLY the JSON, nothing else."""
+- This should work for ANY document type (resumes, papers, articles, documentation, etc.)"""
 
     try:
-        response = llm.invoke(extraction_prompt)
-        extracted_text = response.content.strip()
+        # Use structured output with Pydantic model
+        structured_llm = llm.with_structured_output(DocumentExtraction)
+        extracted = structured_llm.invoke(extraction_prompt)
 
-        # Clean up markdown code blocks if present
-        if extracted_text.startswith("```"):
-            extracted_text = extracted_text.split("```")[1]
-            if extracted_text.startswith("json"):
-                extracted_text = extracted_text[4:]
-
-        extracted = json.loads(extracted_text)
+        # Convert Pydantic models to dicts for summary structure
+        key_concepts = [concept.model_dump() for concept in extracted.key_concepts]
+        key_facts = [fact.model_dump() for fact in extracted.key_facts]
 
         # Build summary structure
         summary = {
@@ -92,11 +111,11 @@ Return ONLY the JSON, nothing else."""
             "doc_id": doc_id,
             "source": source,
             "namespace": namespace,
-            "document_type": extracted.get("document_type", "other"),
-            "primary_subject": extracted.get("primary_subject", ""),
-            "key_concepts": extracted.get("key_concepts", []),
-            "key_facts": extracted.get("key_facts", []),
-            "topics": extracted.get("topics", []),
+            "document_type": extracted.document_type,
+            "primary_subject": extracted.primary_subject,
+            "key_concepts": key_concepts,
+            "key_facts": key_facts,
+            "topics": extracted.topics,
             "chunk_count": len(chunks),
             "extracted_at": datetime.utcnow().isoformat(),
             "embedding_model": EMBEDDING_MODEL
@@ -109,9 +128,8 @@ Return ONLY the JSON, nothing else."""
 
         return summary
 
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse extraction JSON for {doc_id}: {e}")
-        logger.error(f"Raw response: {extracted_text[:500]}")
+    except Exception as e:
+        logger.error(f"Summary extraction failed for {doc_id}: {e}")
         # Return minimal summary
         return {
             "type": "document_summary",
@@ -120,24 +138,7 @@ Return ONLY the JSON, nothing else."""
             "namespace": namespace,
             "document_type": "other",
             "primary_subject": f"Document: {source}",
-            "key_entities": [],
-            "key_facts": [],
-            "topics": [],
-            "chunk_count": len(chunks),
-            "extracted_at": datetime.utcnow().isoformat(),
-            "embedding_model": EMBEDDING_MODEL,
-            "extraction_error": str(e)
-        }
-    except Exception as e:
-        logger.error(f"Summary extraction failed for {doc_id}: {e}")
-        return {
-            "type": "document_summary",
-            "doc_id": doc_id,
-            "source": source,
-            "namespace": namespace,
-            "document_type": "other",
-            "primary_subject": f"Document: {source}",
-            "key_entities": [],
+            "key_concepts": [],
             "key_facts": [],
             "topics": [],
             "chunk_count": len(chunks),
