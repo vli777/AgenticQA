@@ -19,7 +19,7 @@ if not pc.has_index(PINECONE_INDEX_NAME):
             region="us-east-1",
         ),
     )
-    print(f"✓ Created Pinecone index '{PINECONE_INDEX_NAME}' ({EMBED_DIM}-dim)")
+    print(f"[OK] Created Pinecone index '{PINECONE_INDEX_NAME}' ({EMBED_DIM}-dim)")
 
 index = pc.Index(PINECONE_INDEX_NAME)
 
@@ -33,4 +33,4 @@ if index_dim != EMBED_DIM:
         f"model={EMBED_DIM}. Drop & recreate the index."
     )
 
-print(f"✓ Pinecone index '{PINECONE_INDEX_NAME}' validated ({index_dim}-dim)")
+print(f"[OK] Pinecone index '{PINECONE_INDEX_NAME}' validated ({index_dim}-dim)")

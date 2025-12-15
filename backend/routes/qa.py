@@ -14,6 +14,8 @@ from config import (
     ENABLE_CACHING, ENABLE_STREAMING
 )
 from models import AskRequest
+
+DEFAULT_NAMESPACE = "default"
 from langchain_agent import get_agent
 from langchain_core.output_parsers.json import JsonOutputParser
 from hybrid_search import hybrid_search_engine
@@ -278,7 +280,7 @@ async def ask_agentic_stream(
         from langchain_agent import get_streaming_agent
 
         try:
-            agent_generator = get_streaming_agent(namespace=namespace)
+            agent_generator = await get_streaming_agent(namespace=namespace)
 
             # Stream reasoning steps and final answer
             async for event in agent_generator({"input": standalone_question, "chat_history": topic_history}):
