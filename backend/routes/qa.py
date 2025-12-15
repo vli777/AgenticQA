@@ -249,34 +249,36 @@ async def ask_agentic(req: AskRequest):
         return fallback
 
 
-@router.post("/agentic/stream")
-async def ask_agentic_stream(req: AskRequest):
+@router.get("/agentic/stream")
+async def ask_agentic_stream(
+    question: str,
+    namespace: str = DEFAULT_NAMESPACE,
+    conversation_id: str = None
+):
     """
     Streaming agentic QA with real-time reasoning updates and inline citations.
     Reasoning steps are streamed as single-line status updates (disappear in UI).
     Final answer includes inline citations [1], [2], etc.
     Sources are logged on backend only, not sent to frontend.
     """
-    import json
-    from fastapi.responses import StreamingResponse
 
     async def generate():
-        conversation_id = req.conversation_id or req.namespace
-        conversation_memory_manager.add_user_message(conversation_id, req.question)
-        topic_history = conversation_memory_manager.get_topic_context(conversation_id)
+        conv_id = conversation_id or namespace
+        conversation_memory_manager.add_user_message(conv_id, question)
+        topic_history = conversation_memory_manager.get_topic_context(conv_id)
 
         # Rewrite query
         yield f"data: {json.dumps({'type': 'reasoning', 'content': 'Processing question...'})}\n\n"
 
-        standalone_question = _rewrite_query(req.question, topic_history)
-        if standalone_question != req.question:
-            logger.info(f"Rewrote agentic question '{req.question}' -> '{standalone_question}'")
+        standalone_question = _rewrite_query(question, topic_history)
+        if standalone_question != question:
+            logger.info(f"Rewrote agentic question '{question}' -> '{standalone_question}'")
 
         # Get streaming agent
         from langchain_agent import get_streaming_agent
 
         try:
-            agent_generator = get_streaming_agent(namespace=req.namespace)
+            agent_generator = get_streaming_agent(namespace=namespace)
 
             # Stream reasoning steps and final answer
             async for event in agent_generator({"input": standalone_question, "chat_history": topic_history}):
@@ -297,7 +299,7 @@ async def ask_agentic_stream(req: AskRequest):
                     yield f"data: {json.dumps({'type': 'answer', 'content': answer})}\n\n"
 
                     # Store in memory
-                    conversation_memory_manager.add_assistant_message(conversation_id, answer)
+                    conversation_memory_manager.add_assistant_message(conv_id, answer)
 
             # Signal completion
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
@@ -309,8 +311,12 @@ async def ask_agentic_stream(req: AskRequest):
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 
-@router.post("/stream")
-async def ask_stream(req: AskRequest):
+@router.get("/stream")
+async def ask_stream(
+    question: str,
+    namespace: str = DEFAULT_NAMESPACE,
+    conversation_id: str = None
+):
     """
     Streaming endpoint for real-time token-by-token responses.
     Returns Server-Sent Events (SSE) stream.
@@ -318,40 +324,41 @@ async def ask_stream(req: AskRequest):
     if not ENABLE_STREAMING:
         raise HTTPException(status_code=501, detail="Streaming is not enabled")
 
-    conversation_id = req.conversation_id or req.namespace
-    conversation_memory_manager.add_user_message(conversation_id, req.question)
-    topic_history = conversation_memory_manager.get_topic_context(conversation_id)
-    standalone_question = _rewrite_query(req.question, topic_history)
-    if standalone_question != req.question:
-        logger.info(f"Rewrote streaming question '{req.question}' -> '{standalone_question}'")
+    conv_id = conversation_id or namespace
+    conversation_memory_manager.add_user_message(conv_id, question)
+    topic_history = conversation_memory_manager.get_topic_context(conv_id)
+    standalone_question = _rewrite_query(question, topic_history)
+
+    async def sse_send(payload: dict) -> str:
+        # One SSE event (data line + blank line)
+        return f"data: {json.dumps(payload)}\n\n"
 
     async def generate():
-        """Generate streaming response."""
         try:
-            # First, get search results
             reranked_results = await hybrid_search_engine.hybrid_search_with_rerank(
                 query=standalone_question,
-                namespace=req.namespace,
+                namespace=namespace,
                 top_k=MAX_MATCHES_TO_RETURN,
                 vector_k=VECTOR_K
             )
 
             if not reranked_results:
-                message = "No relevant documents found"
-                yield json.dumps({"type": "error", "content": message}) + "\n"
-                conversation_memory_manager.add_assistant_message(conversation_id, message)
+                msg = "No relevant documents found"
+                yield await sse_send({"type": "error", "content": msg})
+                conversation_memory_manager.add_assistant_message(conv_id, msg)
+                yield await sse_send({"type": "done"})
                 return
 
-            # Format context from results
-            context_parts = []
-            for result in reranked_results:
-                text = result.get("metadata", {}).get("text", "")
-                source = result.get("metadata", {}).get("source", "unknown")
-                context_parts.append(f"[{source}] {text[:500]}")
+            sources = [r.get("metadata", {}).get("source", "unknown") for r in reranked_results]
+            yield await sse_send({"type": "sources", "content": sources})
 
+            context_parts = []
+            for r in reranked_results:
+                text = r.get("metadata", {}).get("text", "")
+                source = r.get("metadata", {}).get("source", "unknown")
+                context_parts.append(f"[{source}] {text[:500]}")
             context = "\n\n".join(context_parts)
 
-            # Create streaming LLM
             streaming_llm = ChatNVIDIA(
                 model="meta/llama-4-maverick-17b-128e-instruct",
                 temperature=0.0,
@@ -360,35 +367,42 @@ async def ask_stream(req: AskRequest):
 
             prompt = f"""Based on the following context, answer the question concisely.
 
-Context:
-{context}
+                Context:
+                {context}
 
-Question: {standalone_question}
+                Question: {standalone_question}
 
-Answer:"""
+                Answer:"""
 
-            # Send sources first
-            sources = [r.get("metadata", {}).get("source", "unknown") for r in reranked_results]
-            yield json.dumps({"type": "sources", "content": sources}) + "\n"
-
-            # Stream tokens
             assistant_reply = []
             async for chunk in streaming_llm.astream(prompt):
-                if hasattr(chunk, "content"):
+                if hasattr(chunk, "content") and chunk.content:
                     assistant_reply.append(chunk.content)
-                    yield json.dumps({"type": "token", "content": chunk.content}) + "\n"
+                    yield await sse_send({"type": "token", "content": chunk.content})
 
-            # Send completion signal
-            yield json.dumps({"type": "done"}) + "\n"
+            yield await sse_send({"type": "done"})
 
             if assistant_reply:
-                conversation_memory_manager.add_assistant_message(conversation_id, "".join(assistant_reply))
-        except Exception as e:
-            logger.error(f"Streaming error: {str(e)}")
-            yield json.dumps({"type": "error", "content": str(e)}) + "\n"
-            conversation_memory_manager.add_assistant_message(conversation_id, f"Streaming error: {str(e)}")
+                conversation_memory_manager.add_assistant_message(conv_id, "".join(assistant_reply))
 
-    return StreamingResponse(generate(), media_type="text/event-stream")
+        except Exception as e:
+            err = f"Streaming error: {str(e)}"
+            logger.error(err, exc_info=True)
+            yield await sse_send({"type": "error", "content": err})
+            yield await sse_send({"type": "done"})
+            conversation_memory_manager.add_assistant_message(conv_id, err)
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            # If you have nginx in front, this prevents buffering:
+            "X-Accel-Buffering": "no",
+        },
+    )
+
 
 
 @router.get("/cache/stats")
