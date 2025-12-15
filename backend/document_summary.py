@@ -1,7 +1,7 @@
 # backend/document_summary.py
 
 import json
-from typing import List, Dict, Any, Set, Optional, Literal
+from typing import List, Dict, Any, Optional, Literal
 from datetime import datetime
 
 from pydantic import BaseModel, Field

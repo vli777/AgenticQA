@@ -43,7 +43,7 @@ for model_name in model_names_to_try:
             model=model_name,
             api_key=NVIDIA_API_KEY
         )
-        print(f"✅ SUCCESS!")
+        print("✅ SUCCESS!")
         print(f"  Model initialized: {model_name}")
 
         # Try a test query
@@ -61,7 +61,7 @@ for model_name in model_names_to_try:
         break
 
     except Exception as e:
-        print(f"❌ FAILED")
+        print("❌ FAILED")
         print(f"  Error: {str(e)[:100]}")
 
 print("\nDone!")

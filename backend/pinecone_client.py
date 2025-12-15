@@ -1,7 +1,7 @@
 # backend/pinecone_client.py
 
 from pinecone import Pinecone, ServerlessSpec
-from config import PINECONE_API_KEY, PINECONE_INDEX_NAME, EMBEDDING_MODEL, VECTOR_DIMENSION
+from config import PINECONE_API_KEY, PINECONE_INDEX_NAME, VECTOR_DIMENSION
 
 # Use VECTOR_DIMENSION from config (defaults to 2048 for nvidia/llama-3.2-nv-embedqa-1b-v2)
 EMBED_DIM = VECTOR_DIMENSION

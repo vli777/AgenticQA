@@ -1,7 +1,6 @@
 # backend/langchain_agent.py
 
 import re
-import json
 from typing import List, Any, Dict, TypedDict, Optional, Literal
 
 from pydantic import BaseModel, Field
@@ -15,8 +14,6 @@ from document_summary import (
     list_documents_in_namespace,
     get_document_summary,
     search_summaries,
-    extract_relevant_chunks_from_summary,
-    fetch_chunks_by_refs,
     fetch_full_document
 )
 from logger import logger
@@ -105,7 +102,7 @@ def _get_document_summary_tool(namespace: str = "default") -> Tool:
             f"Type: {summary.get('document_type', 'unknown')}",
             f"Subject: {summary.get('primary_subject', 'N/A')}",
             f"\nTopics: {', '.join(summary.get('topics', []))}",
-            f"\nKey Concepts:"
+            "\nKey Concepts:"
         ]
 
         for concept in summary.get("key_concepts", [])[:10]:
@@ -114,7 +111,7 @@ def _get_document_summary_tool(namespace: str = "default") -> Tool:
             refs_str = f"[chunks: {', '.join(map(str, chunk_refs))}]" if chunk_refs else ""
             lines.append(f"  - {concept.get('concept', 'N/A')}: {context} {refs_str}")
 
-        lines.append(f"\nKey Facts:")
+        lines.append("\nKey Facts:")
         for fact in summary.get("key_facts", [])[:15]:
             chunk_refs = fact.get("chunk_refs", [])
             refs_str = f"[chunks: {', '.join(map(str, chunk_refs))}]" if chunk_refs else ""

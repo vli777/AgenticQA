@@ -1,14 +1,13 @@
 # backend/hybrid_search.py
 
 from typing import List, Dict, Any, Optional, Set
-import re
 
 from langchain_nvidia_ai_endpoints import NVIDIARerank
 from langchain_core.documents import Document
 
 from logger import logger
 from pinecone_client import index, EMBED_DIM
-from config import EMBEDDING_MODEL, SEMANTIC_TAG_BOOST, NVIDIA_API_KEY
+from config import EMBEDDING_MODEL, NVIDIA_API_KEY
 from utils import get_embedding
 from semantic_tags import infer_query_tags
 
