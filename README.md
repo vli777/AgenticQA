@@ -4,8 +4,9 @@
   natural language questions, and receive answers that cite supporting passages. The backend runs a conversation-aware
   retrieval agent that plans searches, rewrites follow-up questions, and verifies every response against the evidence
   before replying.
-<img width="1245" height="1252" alt="Screenshot 2025-11-14 204431" src="https://github.com/user-attachments/assets/16487805-56f6-4c74-876d-1d73aa0ed36c" />
-<img width="1410" height="799" alt="image" src="https://github.com/user-attachments/assets/32773f72-9c0d-4f51-bd82-9acb1389a282" />
+  
+<img width="1518" height="1052" alt="Screenshot 2025-12-15 163059" src="https://github.com/user-attachments/assets/1f65b342-3786-485f-bb09-7b8e6f139420" />
+<img width="1542" height="1068" alt="Screenshot 2025-12-15 163109" src="https://github.com/user-attachments/assets/4cb128d0-b8ea-4977-ac33-c4b62a2a571c" />
 
   ---
 
