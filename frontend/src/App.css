@@ -373,6 +373,34 @@
   letter-spacing: 0.03em;
 }
 
+.streaming-status {
+  padding: 12px 32px;
+  background: #eff6ff;
+  border-top: 1px solid #bfdbfe;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.9rem;
+  color: #1e40af;
+}
+
+.status-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #3b82f6;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
 .message-composer {
   padding: 20px 32px 28px;
   border-top: 1px solid #e2e8f0;

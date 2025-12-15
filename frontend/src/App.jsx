@@ -4,11 +4,6 @@ import './App.css'
 const DEFAULT_NAMESPACE = 'default'
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000').replace(/\/$/, '')
 
-const formatScore = (score) => {
-  if (typeof score !== 'number') return null
-  return (score * 100).toFixed(1)
-}
-
 function App() {
   const [namespace, setNamespace] = useState(DEFAULT_NAMESPACE)
   const [selectedFiles, setSelectedFiles] = useState([])
@@ -17,9 +12,9 @@ function App() {
   const [isUploading, setIsUploading] = useState(false)
   const [messages, setMessages] = useState([])
   const [inputValue, setInputValue] = useState('')
-  const [chatMode, setChatMode] = useState('agentic')
   const [isSending, setIsSending] = useState(false)
   const [chatError, setChatError] = useState('')
+  const [streamingStatus, setStreamingStatus] = useState('')
   const [isClearing, setIsClearing] = useState(false)
   const [clearMessage, setClearMessage] = useState('')
   const [clearError, setClearError] = useState('')
@@ -140,21 +135,6 @@ function App() {
     setMessages((prev) => [...prev, message])
   }
 
-  const buildHistoryPayload = () => {
-    const sliceStart = Math.max(messages.length - 6, 0)
-    const normalizeContent = (msg) => {
-      if (msg.role === 'assistant' && msg.mode === 'rag' && Array.isArray(msg.matches) && msg.matches.length) {
-        const snippets = msg.matches.map((match) => match.text || '').filter(Boolean)
-        return [msg.content, ...snippets].join('\n')
-      }
-      return typeof msg.content === 'string' ? msg.content : String(msg.content || '')
-    }
-    return messages.slice(sliceStart).map((msg) => ({
-      role: msg.role,
-      content: normalizeContent(msg),
-    }))
-  }
-
   const handleSend = async (event) => {
     event.preventDefault()
     const question = inputValue.trim()
@@ -164,112 +144,113 @@ function App() {
     setInputValue('')
     setChatError('')
     setIsSending(true)
+    setStreamingStatus('Connecting...')
 
-    const endpoint = chatMode === 'agentic' ? '/ask/agentic' : '/ask/'
+    // Build URL with query parameters for GET request
+    const url = new URL(`${API_BASE_URL}/ask/agentic/stream`)
+    url.searchParams.set('question', question)
+    url.searchParams.set('namespace', sanitizedNamespace)
+    url.searchParams.set('conversation_id', conversationId)
+
+    let eventSource = null
+    let currentAnswer = ''
+    let messageIndex = messages.length + 1 // +1 because we just added user message
+
     try {
-      const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          question,
-          namespace: sanitizedNamespace,
-          history: buildHistoryPayload(),
-          conversation_id: conversationId,
-        }),
-      })
+      eventSource = new EventSource(url.toString())
 
-      if (!response.ok) {
-        const detail = await response.json().catch(() => ({}))
-        throw new Error(detail?.detail || `Request failed with status ${response.status}`)
+      eventSource.onopen = () => {
+        setStreamingStatus('Connected')
       }
 
-      const data = await response.json()
+      eventSource.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data)
 
-      if (chatMode === 'agentic') {
-        appendMessage({
-          role: 'assistant',
-          mode: 'agentic',
-          content: data?.answer || 'No answer returned.',
-          reasoning: Array.isArray(data?.reasoning) ? data.reasoning : [],
-          sources: Array.isArray(data?.sources) ? data.sources : [],
-        })
-      } else {
-        const matches = Array.isArray(data?.results?.matches) ? data.results.matches : []
-        appendMessage({
-          role: 'assistant',
-          mode: 'rag',
-          content: matches.length ? 'Here is what I found:' : 'No high-confidence matches were found.',
-          matches: matches.map((match, index) => ({
-            id: match.id ?? `match-${index}`,
-            score: match.score,
-            text: match.metadata?.text || '',
-            source: match.metadata?.source || match.metadata?.doc_id || 'Unknown source',
-          })),
-        })
+          if (data.type === 'reasoning') {
+            // Update streaming status with reasoning step
+            setStreamingStatus(data.content)
+          } else if (data.type === 'answer') {
+            // Append answer content
+            currentAnswer = data.content
+
+            // Update or append the assistant message
+            setMessages((prev) => {
+              const newMessages = [...prev]
+              if (newMessages[messageIndex] && newMessages[messageIndex].role === 'assistant') {
+                // Update existing message
+                newMessages[messageIndex] = {
+                  ...newMessages[messageIndex],
+                  content: currentAnswer,
+                }
+              } else {
+                // Add new message
+                newMessages.push({
+                  role: 'assistant',
+                  mode: 'agentic',
+                  content: currentAnswer,
+                })
+              }
+              return newMessages
+            })
+          } else if (data.type === 'done') {
+            // Stream complete
+            setStreamingStatus('')
+            setIsSending(false)
+            eventSource.close()
+          } else if (data.type === 'error') {
+            setChatError(data.content || 'Streaming error occurred')
+            setStreamingStatus('')
+            setIsSending(false)
+            eventSource.close()
+          }
+        } catch (parseError) {
+          console.error('Failed to parse SSE data:', parseError)
+        }
+      }
+
+      eventSource.onerror = (error) => {
+        console.error('EventSource error:', error)
+        setChatError('Connection to server lost')
+        setStreamingStatus('')
+        setIsSending(false)
+
+        if (eventSource) {
+          eventSource.close()
+        }
+
+        // Add error message if no answer was received
+        if (!currentAnswer) {
+          appendMessage({
+            role: 'assistant',
+            mode: 'error',
+            content: 'Sorry, I could not process that request.',
+          })
+        }
       }
     } catch (error) {
       setChatError(error.message || 'Unexpected error while contacting the backend.')
+      setStreamingStatus('')
+      setIsSending(false)
+
       appendMessage({
         role: 'assistant',
         mode: 'error',
         content: 'Sorry, I could not process that request.',
       })
-    } finally {
-      setIsSending(false)
     }
   }
 
   const renderAssistantMessage = (message) => {
-    if (message.mode === 'agentic') {
-      return (
-        <div className="agentic-response">
-          <p className="answer-text">{message.content}</p>
-          {message.reasoning?.length ? (
-            <div className="reasoning-block">
-              <h4>Reasoning</h4>
-              <ol>
-                {message.reasoning.map((step, index) => (
-                  <li key={index}>{step}</li>
-                ))}
-              </ol>
-            </div>
-          ) : null}
-          {message.sources?.length ? (
-            <div className="sources-block">
-              <h4>Sources</h4>
-              <ul>
-                {message.sources.map((source, index) => (
-                  <li key={index}>{source}</li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
-        </div>
-      )
+    if (message.mode === 'error') {
+      return <p className="answer-text">{message.content}</p>
     }
 
-    if (message.mode === 'rag') {
-      return (
-        <div className="rag-response">
-          <p className="answer-text">{message.content}</p>
-          {message.matches?.length ? (
-            <ul className="match-list">
-              {message.matches.map((match) => (
-                <li key={match.id}>
-                  <div className="match-source">{match.source}</div>
-                  {match.score !== undefined ? (
-                    <div className="match-score">{formatScore(match.score)}% match</div>
-                  ) : null}
-                  <p>{match.text}</p>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </div>
-      )
-    }
-
-    return <p className="answer-text">{message.content}</p>
+    return (
+      <div className="agentic-response">
+        <p className="answer-text">{message.content}</p>
+      </div>
+    )
   }
 
   return (
@@ -347,22 +328,6 @@ function App() {
             <h2>Chat</h2>
             <p className="section-description">Ask the assistant about the documents you have indexed.</p>
           </div>
-          <div className="mode-switcher">
-            <button
-              type="button"
-              className={chatMode === 'rag' ? 'active' : ''}
-              onClick={() => setChatMode('rag')}
-            >
-              RAG
-            </button>
-            <button
-              type="button"
-              className={chatMode === 'agentic' ? 'active' : ''}
-              onClick={() => setChatMode('agentic')}
-            >
-              Agentic
-            </button>
-          </div>
         </div>
 
         <div className="message-list">
@@ -375,8 +340,6 @@ function App() {
               <div key={index} className={`message ${message.role}`}>
                 <div className="message-meta">
                   <span className="speaker">{message.role === 'user' ? 'You' : 'Assistant'}</span>
-                  {message.mode === 'agentic' ? <span className="mode-chip">Agentic</span> : null}
-                  {message.mode === 'rag' ? <span className="mode-chip">RAG</span> : null}
                   {message.mode === 'error' ? <span className="mode-chip error">Error</span> : null}
                 </div>
                 <div className="message-content">
@@ -389,12 +352,19 @@ function App() {
           )}
         </div>
 
+        {streamingStatus && (
+          <div className="streaming-status">
+            <span className="status-indicator"></span>
+            {streamingStatus}
+          </div>
+        )}
+
         <form className="message-composer" onSubmit={handleSend}>
           <textarea
             value={inputValue}
             onChange={(event) => setInputValue(event.target.value)}
-            placeholder={chatMode === 'agentic' ? 'Ask a complex question – the agent can plan multiple searches…' : 'Ask a question about your documents…'}
-            rows={chatMode === 'agentic' ? 3 : 2}
+            placeholder="Ask a question about your documents…"
+            rows={3}
             disabled={isSending}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey) {
