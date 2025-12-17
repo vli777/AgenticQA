@@ -258,7 +258,7 @@ function App() {
       <aside className="side-panel">
         <header>
           <h1>AgenticQA</h1>
-          <p className="tagline">Upload documents, then ask questions via standard RAG or the agentic workflow.</p>
+          <p className="tagline">Upload documents, then ask questions about them.</p>
         </header>
 
         <section className="namespace-section">
