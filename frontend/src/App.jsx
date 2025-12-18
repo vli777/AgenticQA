@@ -10,7 +10,7 @@ function App() {
   const [uploadSummary, setUploadSummary] = useState(null)
   const [uploadError, setUploadError] = useState('')
   const [isUploading, setIsUploading] = useState(false)
-  const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0, fileName: '', status: '' })
+  const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0, fileName: '', status: '', step: 0, totalSteps: 0 })
   const [messages, setMessages] = useState([])
   const [inputValue, setInputValue] = useState('')
   const [isSending, setIsSending] = useState(false)
@@ -104,7 +104,7 @@ function App() {
 
     setIsUploading(true)
     setUploadError('')
-    setUploadProgress({ current: 0, total: selectedFiles.length, fileName: '', status: 'Starting upload...' })
+    setUploadProgress({ current: 0, total: selectedFiles.length, fileName: '', status: 'Starting upload...', step: 0, totalSteps: 6 })
 
     try {
       const response = await fetch(url, {
@@ -141,7 +141,9 @@ function App() {
                 current: data.current,
                 total: data.total,
                 fileName: data.file_name,
-                status: data.status
+                status: data.status,
+                step: data.step || 0,
+                totalSteps: data.total_steps || 6
               })
             } else if (data.type === 'complete') {
               totalChunks = data.indexed_chunks
@@ -161,10 +163,10 @@ function App() {
       if (fileInputRef.current) {
         fileInputRef.current.value = ''
       }
-      setUploadProgress({ current: 0, total: 0, fileName: '', status: '' })
+      setUploadProgress({ current: 0, total: 0, fileName: '', status: '', step: 0, totalSteps: 0 })
     } catch (error) {
       setUploadError(error.message || 'Unexpected error while uploading files.')
-      setUploadProgress({ current: 0, total: 0, fileName: '', status: '' })
+      setUploadProgress({ current: 0, total: 0, fileName: '', status: '', step: 0, totalSteps: 0 })
     } finally {
       setIsUploading(false)
     }
@@ -328,28 +330,38 @@ function App() {
 
         <section className="upload-section">
           <h2>Document Upload</h2>
-          <p className="section-description">Upload one document at a time. Supported formats: PDF, TXT.</p>
+          <p className="section-description">Upload one document at a time. Supported formats: PDF, DOCX, TXT.</p>
 
           <label className="upload-control" htmlFor="file-input">
             <input
               id="file-input"
               ref={fileInputRef}
               type="file"
-              accept=".pdf,.txt"
+              accept=".pdf,.docx,.txt"
               onChange={handleFileSelection}
             />
           </label>
 
           <button type="button" onClick={handleUpload} disabled={isUploading}>
-            {isUploading ? 'Uploading…' : 'Upload & Index'}
+            {isUploading ? 'Uploading…' : 'Upload'}
           </button>
 
-          {isUploading && uploadProgress.fileName && (
+          {isUploading && (
             <div className="upload-progress">
               <div className="progress-info">
-                <strong>Processing {uploadProgress.fileName}</strong>
+                {uploadProgress.step > 0 && (
+                  <strong>Step {uploadProgress.step} of {uploadProgress.totalSteps}</strong>
+                )}
                 {uploadProgress.status && <p className="progress-status">{uploadProgress.status}</p>}
               </div>
+              {uploadProgress.totalSteps > 0 && (
+                <div className="progress-bar">
+                  <div
+                    className="progress-fill"
+                    style={{ width: `${(uploadProgress.step / uploadProgress.totalSteps) * 100}%` }}
+                  ></div>
+                </div>
+              )}
             </div>
           )}
 
