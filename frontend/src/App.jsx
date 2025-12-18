@@ -10,6 +10,7 @@ function App() {
   const [uploadSummary, setUploadSummary] = useState(null)
   const [uploadError, setUploadError] = useState('')
   const [isUploading, setIsUploading] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0, fileName: '', status: '' })
   const [messages, setMessages] = useState([])
   const [inputValue, setInputValue] = useState('')
   const [isSending, setIsSending] = useState(false)
@@ -33,8 +34,8 @@ function App() {
   }, [namespace])
 
   const handleFileSelection = (event) => {
-    const files = Array.from(event.target.files || [])
-    setSelectedFiles(files)
+    const file = event.target.files?.[0]
+    setSelectedFiles(file ? [file] : [])
     setUploadError('')
     setUploadSummary(null)
     setClearMessage('')
@@ -91,7 +92,7 @@ function App() {
 
   const handleUpload = async () => {
     if (!selectedFiles.length) {
-      setUploadError('Select at least one PDF or TXT file before uploading.')
+      setUploadError('Please select a PDF or TXT file to upload.')
       return
     }
 
@@ -103,6 +104,7 @@ function App() {
 
     setIsUploading(true)
     setUploadError('')
+    setUploadProgress({ current: 0, total: selectedFiles.length, fileName: '', status: 'Starting upload...' })
 
     try {
       const response = await fetch(url, {
@@ -115,17 +117,54 @@ function App() {
         throw new Error(detail?.detail || `Upload failed with status ${response.status}`)
       }
 
-      const data = await response.json()
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      let totalChunks = 0
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (!line.trim() || !line.startsWith('data: ')) continue
+
+          try {
+            const data = JSON.parse(line.slice(6))
+
+            if (data.type === 'progress') {
+              setUploadProgress({
+                current: data.current,
+                total: data.total,
+                fileName: data.file_name,
+                status: data.status
+              })
+            } else if (data.type === 'complete') {
+              totalChunks = data.indexed_chunks
+            } else if (data.type === 'error') {
+              throw new Error(data.message || 'Upload failed')
+            }
+          } catch (parseError) {
+            console.error('Failed to parse SSE data:', parseError)
+          }
+        }
+      }
+
       setUploadSummary({
-        indexedChunks: data?.indexed_chunks ?? 0,
-        fileCount: selectedFiles.length,
+        indexedChunks: totalChunks,
       })
       setSelectedFiles([])
       if (fileInputRef.current) {
         fileInputRef.current.value = ''
       }
+      setUploadProgress({ current: 0, total: 0, fileName: '', status: '' })
     } catch (error) {
       setUploadError(error.message || 'Unexpected error while uploading files.')
+      setUploadProgress({ current: 0, total: 0, fileName: '', status: '' })
     } finally {
       setIsUploading(false)
     }
@@ -289,14 +328,13 @@ function App() {
 
         <section className="upload-section">
           <h2>Document Upload</h2>
-          <p className="section-description">Supported formats: PDF, TXT. Files are chunked and indexed into Pinecone.</p>
+          <p className="section-description">Upload one document at a time. Supported formats: PDF, TXT.</p>
 
           <label className="upload-control" htmlFor="file-input">
             <input
               id="file-input"
               ref={fileInputRef}
               type="file"
-              multiple
               accept=".pdf,.txt"
               onChange={handleFileSelection}
             />
@@ -306,11 +344,19 @@ function App() {
             {isUploading ? 'Uploading…' : 'Upload & Index'}
           </button>
 
+          {isUploading && uploadProgress.fileName && (
+            <div className="upload-progress">
+              <div className="progress-info">
+                <strong>Processing {uploadProgress.fileName}</strong>
+                {uploadProgress.status && <p className="progress-status">{uploadProgress.status}</p>}
+              </div>
+            </div>
+          )}
+
           {uploadSummary ? (
             <div className="upload-summary">
               <strong>Upload complete.</strong>
               <p>
-                {uploadSummary.fileCount} file{uploadSummary.fileCount === 1 ? '' : 's'} processed ·{' '}
                 {uploadSummary.indexedChunks} chunk{uploadSummary.indexedChunks === 1 ? '' : 's'} indexed
               </p>
             </div>
@@ -380,8 +426,10 @@ function App() {
             }}
           />
           <div className="composer-actions">
-            <span className="composer-hint">Shift + Enter for new line</span>
-            <button type="submit" disabled={isSending || !inputValue.trim()}>
+            <span className="composer-hint">
+              {!uploadSummary ? 'Upload documents first' : 'Shift + Enter for new line'}
+            </span>
+            <button type="submit" disabled={isSending || !inputValue.trim() || !uploadSummary}>
               {isSending ? 'Thinking…' : 'Send'}
             </button>
           </div>
