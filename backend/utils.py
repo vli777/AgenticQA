@@ -7,6 +7,7 @@ from typing import List
 from langchain_nvidia_ai_endpoints import NVIDIAEmbeddings
 from openai import OpenAI
 from pypdf import PdfReader
+from docx import Document
 
 from config import EMBEDDING_MODEL, OPENAI_API_KEY, NVIDIA_API_KEY, ENABLE_CACHING
 
@@ -133,6 +134,19 @@ def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> str:
         page_text = page.extract_text()
         if page_text:
             text_parts.append(page_text)
+    return "\n".join(text_parts)
+
+
+def extract_text_from_docx_bytes(docx_bytes: bytes) -> str:
+    """
+    Extract text from a DOCX file (given as raw bytes) and return the concatenated text.
+    Uses python-docx to read all paragraphs.
+    """
+    doc = Document(io.BytesIO(docx_bytes))
+    text_parts = []
+    for paragraph in doc.paragraphs:
+        if paragraph.text.strip():
+            text_parts.append(paragraph.text)
     return "\n".join(text_parts)
 
 

@@ -8,7 +8,7 @@ import json
 
 from services import upsert_doc, chunk_text
 from logger import logger
-from utils import extract_text_from_pdf_bytes
+from utils import extract_text_from_pdf_bytes, extract_text_from_docx_bytes
 from document_summary import (
     extract_structured_summary,
     store_document_summary,
@@ -46,7 +46,7 @@ async def upload_documents_stream(
             for idx, (name, data) in enumerate(file_data, start=1):
 
                 # Send progress update: starting file
-                yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total_files, 'file_name': name, 'status': 'Extracting text...'})}\n\n"
+                yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total_files, 'file_name': name, 'step': 1, 'total_steps': 6, 'status': 'Extracting text...'})}\n\n"
 
                 logger.info(
                     "Processing file '%s' (bytes=%s, namespace=%s)",
@@ -59,10 +59,12 @@ async def upload_documents_stream(
                 try:
                     if lower.endswith(".pdf"):
                         text = extract_text_from_pdf_bytes(data)
+                    elif lower.endswith(".docx"):
+                        text = extract_text_from_docx_bytes(data)
                     elif lower.endswith(".txt"):
                         text = data.decode("utf-8", errors="ignore")
                     else:
-                        yield f"data: {json.dumps({'type': 'error', 'message': f'Only PDF or TXT allowed: {name}'})}\n\n"
+                        yield f"data: {json.dumps({'type': 'error', 'message': f'Unsupported file type. Please upload PDF, DOCX, or TXT files.'})}\n\n"
                         continue
                 except Exception as e:
                     logger.exception("Failed to extract text from file '%s'", name)
@@ -78,14 +80,14 @@ async def upload_documents_stream(
                 safe_doc_id = re.sub(r'[^a-zA-Z0-9]+', '_', name).strip('_').lower() or "document"
 
                 # Send progress: chunking
-                yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total_files, 'file_name': name, 'status': 'Chunking text...'})}\n\n"
+                yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total_files, 'file_name': name, 'step': 2, 'total_steps': 6, 'status': 'Chunking text...'})}\n\n"
 
                 from services import clean_text
                 text = clean_text(text)
                 chunks = chunk_text(text)
 
                 # Send progress: generating summary
-                yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total_files, 'file_name': name, 'status': 'Generating summary...'})}\n\n"
+                yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total_files, 'file_name': name, 'step': 3, 'total_steps': 6, 'status': 'Generating summary...'})}\n\n"
 
                 logger.info(f"Extracting structured summary for '{name}'...")
                 summary = extract_structured_summary(
@@ -96,12 +98,12 @@ async def upload_documents_stream(
                 )
 
                 # Send progress: storing summary
-                yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total_files, 'file_name': name, 'status': 'Storing summary...'})}\n\n"
+                yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total_files, 'file_name': name, 'step': 4, 'total_steps': 6, 'status': 'Storing summary...'})}\n\n"
 
                 store_document_summary(summary, namespace)
 
                 # Send progress: checking cross-doc overlap
-                yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total_files, 'file_name': name, 'status': 'Checking cross-document overlap...'})}\n\n"
+                yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total_files, 'file_name': name, 'step': 5, 'total_steps': 6, 'status': 'Analyzing document relationships...'})}\n\n"
 
                 cross_summary = detect_cross_document_overlap(summary, namespace)
                 if cross_summary:
@@ -112,7 +114,7 @@ async def upload_documents_stream(
                     store_cross_document_summary(cross_summary, namespace)
 
                 # Send progress: indexing chunks
-                yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total_files, 'file_name': name, 'status': 'Indexing chunks...'})}\n\n"
+                yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total_files, 'file_name': name, 'step': 6, 'total_steps': 6, 'status': 'Indexing chunks...'})}\n\n"
 
                 result = upsert_doc(
                     text,
