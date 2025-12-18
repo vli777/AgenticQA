@@ -465,9 +465,7 @@ function App() {
             </div>
           ) : null}
 
-          {clearMessage ? <p className="success-message">{clearMessage}</p> : null}
           {uploadError ? <p className="error-message">{uploadError}</p> : null}
-          {clearError ? <p className="error-message">{clearError}</p> : null}
         </section>
       </aside>
 
