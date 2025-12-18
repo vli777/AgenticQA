@@ -122,6 +122,7 @@ function App() {
       const decoder = new TextDecoder()
       let buffer = ''
       let totalChunks = 0
+      let warnings = []
 
       while (true) {
         const { done, value } = await reader.read()
@@ -148,6 +149,11 @@ function App() {
               })
             } else if (data.type === 'complete') {
               totalChunks = data.indexed_chunks
+              if (data.warnings) {
+                warnings = data.warnings
+              }
+            } else if (data.type === 'warning') {
+              warnings.push(data.message)
             } else if (data.type === 'error') {
               throw new Error(data.message || 'Upload failed')
             }
@@ -159,6 +165,7 @@ function App() {
 
       setUploadSummary({
         indexedChunks: totalChunks,
+        warnings: warnings.length > 0 ? warnings : null,
       })
       setSelectedFiles([])
       if (fileInputRef.current) {
@@ -458,10 +465,15 @@ function App() {
 
           {uploadSummary ? (
             <div className="upload-summary">
-              <strong>Upload complete.</strong>
+              <strong>{uploadSummary.warnings ? 'Upload complete with warnings.' : 'Upload complete.'}</strong>
               <p>
                 {uploadSummary.indexedChunks} chunk{uploadSummary.indexedChunks === 1 ? '' : 's'} indexed
               </p>
+              {uploadSummary.warnings && uploadSummary.warnings.map((warning, idx) => (
+                <p key={idx} className="error-message" style={{ marginTop: '8px' }}>
+                  {warning}
+                </p>
+              ))}
             </div>
           ) : null}
 
