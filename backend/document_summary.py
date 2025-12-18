@@ -10,8 +10,15 @@ from logger import logger
 from pinecone_client import index, EMBED_DIM
 from config import EMBEDDING_MODEL
 from utils import get_embedding
+from exceptions import CircuitBreakerOpenError
+from structured_output import get_document_summary_schema, extract_with_nvidia_guided_json
 
 llm = ChatNVIDIA(model="meta/llama-4-maverick-17b-128e-instruct", temperature=0.0)
+
+# Circuit breaker for failed summary extractions
+_summary_failure_count = 0
+_summary_circuit_open = False
+SUMMARY_FAILURE_THRESHOLD = 3
 
 
 # ---------------------------
@@ -68,6 +75,16 @@ def extract_structured_summary(
     Returns:
         Structured summary with citations
     """
+    global _summary_failure_count, _summary_circuit_open
+
+    # Circuit breaker: if too many failures, abort processing
+    if _summary_circuit_open:
+        logger.error(
+            f"Summary circuit breaker open ({_summary_failure_count} consecutive failures), "
+            f"aborting processing"
+        )
+        raise CircuitBreakerOpenError("An error occurred during summary generation")
+
     # Combine chunks for extraction (limit to reasonable size)
     max_chars = 8000  # ~4000 tokens for LLM context
     combined_text = ""
@@ -96,14 +113,10 @@ Important:
 - Be comprehensive and specific
 - This should work for ANY document type (resumes, papers, articles, documentation, etc.)"""
 
+    # Use NVIDIA's guided_json for structured output
     try:
-        # Use structured output with Pydantic model
-        structured_llm = llm.with_structured_output(DocumentExtraction)
-        extracted = structured_llm.invoke(extraction_prompt)
-
-        # Convert Pydantic models to dicts for summary structure
-        key_concepts = [concept.model_dump() for concept in extracted.key_concepts]
-        key_facts = [fact.model_dump() for fact in extracted.key_facts]
+        doc_schema = get_document_summary_schema()
+        extracted_dict = extract_with_nvidia_guided_json(llm, extraction_prompt, doc_schema)
 
         # Build summary structure
         summary = {
@@ -111,16 +124,19 @@ Important:
             "doc_id": doc_id,
             "source": source,
             "namespace": namespace,
-            "document_type": extracted.document_type,
-            "primary_subject": extracted.primary_subject,
-            "key_concepts": key_concepts,
-            "key_facts": key_facts,
-            "topics": extracted.topics,
+            "document_type": extracted_dict.get("document_type", "other"),
+            "primary_subject": extracted_dict.get("primary_subject", f"Document: {source}"),
+            "key_concepts": extracted_dict.get("key_concepts", []),
+            "key_facts": extracted_dict.get("key_facts", []),
+            "topics": extracted_dict.get("topics", []),
             "chunk_count": len(chunks),
             "extracted_at": datetime.utcnow().isoformat(),
             "embedding_model": EMBEDDING_MODEL
         }
 
+        # Success - reset failure counter
+        _summary_failure_count = 0
+        _summary_circuit_open = False
         logger.info(
             f"Extracted summary for {doc_id}: {len(summary['key_concepts'])} concepts, "
             f"{len(summary['key_facts'])} facts, {len(summary['topics'])} topics, type={summary['document_type']}"
@@ -130,6 +146,11 @@ Important:
 
     except Exception as e:
         logger.error(f"Summary extraction failed for {doc_id}: {e}")
+        _summary_failure_count += 1
+        if _summary_failure_count >= SUMMARY_FAILURE_THRESHOLD:
+            _summary_circuit_open = True
+            logger.error(f"Summary circuit breaker opened after {_summary_failure_count} consecutive failures")
+
         # Return minimal summary
         return {
             "type": "document_summary",
