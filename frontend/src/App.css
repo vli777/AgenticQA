@@ -348,6 +348,11 @@
   color: #b91c1c;
 }
 
+.mode-chip.info {
+  background: rgba(59, 130, 246, 0.15);
+  color: #1e40af;
+}
+
 .message.user .mode-chip {
   background: rgba(255, 255, 255, 0.25);
   color: #ffffff;
@@ -365,6 +370,11 @@
   font-size: 1rem;
   line-height: 1.55;
   white-space: pre-wrap;
+}
+
+.answer-text.info-text {
+  color: #1e40af;
+  font-style: italic;
 }
 
 .agentic-response h4,

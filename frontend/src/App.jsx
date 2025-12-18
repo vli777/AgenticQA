@@ -12,6 +12,7 @@ function App() {
   const [isUploading, setIsUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0, fileName: '', status: '', step: 0, totalSteps: 0 })
   const [messages, setMessages] = useState([])
+  const [queuedQueries, setQueuedQueries] = useState([])
   const [inputValue, setInputValue] = useState('')
   const [isSending, setIsSending] = useState(false)
   const [chatError, setChatError] = useState('')
@@ -170,32 +171,31 @@ function App() {
     } finally {
       setIsUploading(false)
     }
+
+    // Process any queued queries now that upload is complete
+    // Must be after isUploading is set to false
+    await processQueuedQueries()
   }
 
   const appendMessage = (message) => {
     setMessages((prev) => [...prev, message])
   }
 
-  const handleSend = async (event) => {
-    event.preventDefault()
-    const question = inputValue.trim()
-    if (!question) return
-
-    appendMessage({ role: 'user', content: question })
-    setInputValue('')
+  const sendQuery = async (question) => {
     setChatError('')
     setIsSending(true)
     setStreamingStatus('Connecting...')
 
     // Build URL with query parameters for GET request
-    const url = new URL(`${API_BASE_URL}/ask/agentic/stream`)
+    const url = new URL(`${API_BASE_URL}/ask`)
     url.searchParams.set('question', question)
     url.searchParams.set('namespace', sanitizedNamespace)
     url.searchParams.set('conversation_id', conversationId)
 
     let eventSource = null
     let currentAnswer = ''
-    let messageIndex = messages.length + 1 // +1 because we just added user message
+    // Calculate message index when we start - user message was already added
+    const currentMessageIndex = messages.length
 
     try {
       eventSource = new EventSource(url.toString())
@@ -218,10 +218,10 @@ function App() {
             // Update or append the assistant message
             setMessages((prev) => {
               const newMessages = [...prev]
-              if (newMessages[messageIndex] && newMessages[messageIndex].role === 'assistant') {
+              if (newMessages[currentMessageIndex] && newMessages[currentMessageIndex].role === 'assistant') {
                 // Update existing message
-                newMessages[messageIndex] = {
-                  ...newMessages[messageIndex],
+                newMessages[currentMessageIndex] = {
+                  ...newMessages[currentMessageIndex],
                   content: currentAnswer,
                 }
               } else {
@@ -279,6 +279,97 @@ function App() {
         mode: 'error',
         content: 'Sorry, I could not process that request.',
       })
+    }
+  }
+
+  const handleSend = async (event) => {
+    event.preventDefault()
+    const question = inputValue.trim()
+    if (!question) return
+
+    // If uploading, queue the query instead of sending immediately
+    if (isUploading) {
+      setQueuedQueries(prev => {
+        const newQueue = [...prev, question]
+        setStreamingStatus(`Query queued (${newQueue.length} in queue). Will process after upload completes...`)
+        return newQueue
+      })
+      appendMessage({ role: 'user', content: question })
+      setInputValue('')
+      return
+    }
+
+    appendMessage({ role: 'user', content: question })
+    setInputValue('')
+    await sendQuery(question)
+  }
+
+  const processQueuedQueries = async () => {
+    if (queuedQueries.length === 0) {
+      setStreamingStatus('')
+      return
+    }
+
+    console.log('Processing queued queries:', queuedQueries.length)
+    const queries = [...queuedQueries]
+    setQueuedQueries([]) // Clear queue immediately
+
+    // Batch queries intelligently based on estimated token count
+    // Rough estimate: 4 chars per token, max ~2000 tokens per batch for safety
+    // This leaves plenty of room for RAG context, system prompts, and response
+    const MAX_CHARS_PER_BATCH = 8000
+    const batches = []
+    let currentBatch = []
+    let currentBatchSize = 0
+
+    for (const query of queries) {
+      const querySize = query.length
+      const overhead = 50 // "Please answer the following questions:\n\n1. " etc.
+
+      if (currentBatchSize + querySize + overhead > MAX_CHARS_PER_BATCH && currentBatch.length > 0) {
+        // Start a new batch
+        batches.push([...currentBatch])
+        currentBatch = [query]
+        currentBatchSize = querySize + overhead
+      } else {
+        currentBatch.push(query)
+        currentBatchSize += querySize + overhead
+      }
+    }
+
+    if (currentBatch.length > 0) {
+      batches.push(currentBatch)
+    }
+
+    // Process each batch
+    console.log('Total batches to process:', batches.length)
+    try {
+      for (let i = 0; i < batches.length; i++) {
+        const batch = batches[i]
+        const batchInfo = batches.length > 1 ? ` (batch ${i + 1}/${batches.length})` : ''
+        setStreamingStatus(`Processing ${batch.length} queued ${batch.length === 1 ? 'query' : 'queries'}${batchInfo}...`)
+
+        console.log(`Processing batch ${i + 1}/${batches.length}:`, batch)
+
+        if (batch.length === 1) {
+          await sendQuery(batch[0])
+        } else {
+          const combinedQuery = batch.map((q, idx) => `${idx + 1}. ${q}`).join('\n\n')
+          const wrappedQuery = `Please answer the following questions:\n\n${combinedQuery}`
+          console.log('Combined query:', wrappedQuery)
+          await sendQuery(wrappedQuery)
+        }
+
+        // Small delay between batches
+        if (i < batches.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 500))
+        }
+      }
+    } catch (error) {
+      console.error('Error processing queued queries:', error)
+      setChatError(`Failed to process queued queries: ${error.message}`)
+    } finally {
+      setStreamingStatus('')
     }
   }
 
@@ -441,7 +532,7 @@ function App() {
             <span className="composer-hint">
               {!uploadSummary ? 'Upload documents first' : 'Shift + Enter for new line'}
             </span>
-            <button type="submit" disabled={isSending || !inputValue.trim() || !uploadSummary || isUploading}>
+            <button type="submit" disabled={isSending || !inputValue.trim() || !uploadSummary}>
               {isSending ? 'Thinking…' : 'Send'}
             </button>
           </div>
