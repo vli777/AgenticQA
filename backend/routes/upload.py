@@ -15,6 +15,7 @@ from document_summary import (
     detect_cross_document_overlap,
     store_cross_document_summary
 )
+from exceptions import CircuitBreakerOpenError
 
 router = APIRouter()
 
@@ -35,6 +36,7 @@ async def upload_documents_stream(
     async def generate_events():
         total_chunks = 0
         total_files = len(file_data)
+        warnings = []  # Track warnings during upload
 
         logger.info(
             "Streaming upload request received (files=%s, namespace=%s)",
@@ -89,29 +91,37 @@ async def upload_documents_stream(
                 # Send progress: generating summary
                 yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total_files, 'file_name': name, 'step': 3, 'total_steps': 6, 'status': 'Generating summary...'})}\n\n"
 
-                logger.info(f"Extracting structured summary for '{name}'...")
-                summary = extract_structured_summary(
-                    doc_id=safe_doc_id,
-                    chunks=chunks,
-                    source=name,
-                    namespace=namespace
-                )
-
-                # Send progress: storing summary
-                yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total_files, 'file_name': name, 'step': 4, 'total_steps': 6, 'status': 'Storing summary...'})}\n\n"
-
-                store_document_summary(summary, namespace)
-
-                # Send progress: checking cross-doc overlap
-                yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total_files, 'file_name': name, 'step': 5, 'total_steps': 6, 'status': 'Analyzing document relationships...'})}\n\n"
-
-                cross_summary = detect_cross_document_overlap(summary, namespace)
-                if cross_summary:
-                    logger.info(
-                        f"Cross-document overlap detected between {safe_doc_id} and "
-                        f"{cross_summary['related_docs']}"
+                summary = None
+                try:
+                    logger.info(f"Extracting structured summary for '{name}'...")
+                    summary = extract_structured_summary(
+                        doc_id=safe_doc_id,
+                        chunks=chunks,
+                        source=name,
+                        namespace=namespace
                     )
-                    store_cross_document_summary(cross_summary, namespace)
+
+                    # Send progress: storing summary
+                    yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total_files, 'file_name': name, 'step': 4, 'total_steps': 6, 'status': 'Storing summary...'})}\n\n"
+
+                    store_document_summary(summary, namespace)
+
+                    # Send progress: checking cross-doc overlap
+                    yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total_files, 'file_name': name, 'step': 5, 'total_steps': 6, 'status': 'Analyzing document relationships...'})}\n\n"
+
+                    cross_summary = detect_cross_document_overlap(summary, namespace)
+                    if cross_summary:
+                        logger.info(
+                            f"Cross-document overlap detected between {safe_doc_id} and "
+                            f"{cross_summary['related_docs']}"
+                        )
+                        store_cross_document_summary(cross_summary, namespace)
+
+                except CircuitBreakerOpenError as e:
+                    warning_msg = f"An error occurred during summary generation. Results may be less accurate."
+                    warnings.append(warning_msg)
+                    logger.warning(f"Summary generation failed for '{name}': {e}")
+                    yield f"data: {json.dumps({'type': 'warning', 'message': warning_msg})}\n\n"
 
                 # Send progress: indexing chunks
                 yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total_files, 'file_name': name, 'step': 6, 'total_steps': 6, 'status': 'Indexing chunks...'})}\n\n"
@@ -129,28 +139,43 @@ async def upload_documents_stream(
 
                 file_chunks_indexed = result.get("chunks", 0)
                 file_vectors_upserted = result.get("upserted", 0)
+                indexing_circuit_breaker = result.get("circuit_breaker_triggered", False)
+
+                # Check if circuit breaker was triggered during indexing
+                if indexing_circuit_breaker:
+                    warning_msg = "An error occurred during document indexing. Results may be less accurate."
+                    warnings.append(warning_msg)
+                    yield f"data: {json.dumps({'type': 'warning', 'message': warning_msg})}\n\n"
 
                 total_chunks += file_chunks_indexed
 
                 logger.info(
-                    "Indexed file '%s' (namespace=%s, chunks_indexed=%s, pinecone_vectors=%s, summary_extracted=True)",
+                    "Indexed file '%s' (namespace=%s, chunks_indexed=%s, pinecone_vectors=%s, summary_extracted=%s)",
                     name,
                     namespace,
                     file_chunks_indexed,
                     file_vectors_upserted,
+                    summary is not None,
                 )
 
                 # Send progress: file complete
                 yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total_files, 'file_name': name, 'status': f'Complete ({file_chunks_indexed} chunks indexed)'})}\n\n"
 
             logger.info(
-                "Upload request complete (namespace=%s, total_chunks=%s)",
+                "Upload request complete (namespace=%s, total_chunks=%s, warnings=%s)",
                 namespace,
                 total_chunks,
+                len(warnings),
             )
 
             # Send completion event
-            yield f"data: {json.dumps({'type': 'complete', 'indexed_chunks': total_chunks})}\n\n"
+            completion_data = {
+                'type': 'complete',
+                'indexed_chunks': total_chunks,
+            }
+            if warnings:
+                completion_data['warnings'] = warnings
+            yield f"data: {json.dumps(completion_data)}\n\n"
 
         except Exception as e:
             logger.exception("Error during streaming upload")
