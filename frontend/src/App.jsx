@@ -441,7 +441,7 @@ function App() {
             <span className="composer-hint">
               {!uploadSummary ? 'Upload documents first' : 'Shift + Enter for new line'}
             </span>
-            <button type="submit" disabled={isSending || !inputValue.trim() || !uploadSummary}>
+            <button type="submit" disabled={isSending || !inputValue.trim() || !uploadSummary || isUploading}>
               {isSending ? 'Thinking…' : 'Send'}
             </button>
           </div>
