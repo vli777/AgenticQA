@@ -42,8 +42,15 @@ from config import (
     SEMANTIC_TAG_THRESHOLD,
 )
 from logger import logger
+from exceptions import CircuitBreakerOpenError
+from structured_output import get_tag_schema, extract_with_nvidia_guided_json, extract_with_openai_structured_output
 
 _DEFAULT_LABELS = set(SEMANTIC_TAG_LABELS or [])
+
+# Circuit breaker for failed LLM calls
+_llm_failure_count = 0
+_llm_circuit_open = False
+FAILURE_THRESHOLD = 3
 
 
 # ---------------------------
@@ -104,6 +111,13 @@ def _llm_extract_tags(text: str) -> Set[str]:
     Extract semantic tags using LLM with Pydantic structured output (always enabled, domain-agnostic).
     Lets the LLM determine relevant keywords/topics from any content.
     """
+    global _llm_failure_count, _llm_circuit_open
+
+    # Circuit breaker: if too many failures, abort processing
+    if _llm_circuit_open:
+        logger.error(f"LLM circuit breaker open ({_llm_failure_count} consecutive failures), aborting processing")
+        raise CircuitBreakerOpenError("An error occurred during document indexing")
+
     client = _llm_client()
     if not client:
         return set()
@@ -118,38 +132,41 @@ Focus on: key concepts, topics, technologies, domains, or categories mentioned.
 Text: {sample}"""
 
     try:
-        # Handle ChatNVIDIA (LangChain) - supports with_structured_output
-        if hasattr(client, "invoke") and hasattr(client, "with_structured_output"):
-            structured_llm = client.with_structured_output(TagList)
-            response = structured_llm.invoke(prompt)
-            return {tag.lower().strip() for tag in response.tags if tag.strip()}
+        # Use NVIDIA's guided_json for structured output
+        if hasattr(client, "invoke"):
+            tag_schema = get_tag_schema(LLM_TAG_COUNT)
+            parsed = extract_with_nvidia_guided_json(client, prompt, tag_schema)
 
-        # Handle OpenAI - use native structured output via response_format
+            if "tags" in parsed and isinstance(parsed["tags"], list):
+                # Success - reset failure counter
+                _llm_failure_count = 0
+                _llm_circuit_open = False
+                return {tag.lower().strip() for tag in parsed["tags"] if isinstance(tag, str) and tag.strip()}
+
+            logger.warning("Invalid tags format in response")
+            _llm_failure_count += 1
+            if _llm_failure_count >= FAILURE_THRESHOLD:
+                _llm_circuit_open = True
+                logger.error(f"LLM circuit breaker opened after {_llm_failure_count} consecutive failures")
+            return set()
+
+        # Handle OpenAI - use native structured output
         elif hasattr(client, "chat"):
-            try:
-                # Try OpenAI's native structured output (requires newer SDK)
-                response = client.beta.chat.completions.parse(
-                    model="gpt-5.1",
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0.0,
-                    response_format=TagList,
-                )
-                parsed = response.choices[0].message.parsed
-                if parsed:
-                    return {tag.lower().strip() for tag in parsed.tags if tag.strip()}
-            except (AttributeError, Exception) as e:
-                # Fallback to JSON mode if structured output not available
-                logger.info("OpenAI structured output not available, using JSON mode: %s", e)
-                response = client.chat.completions.create(
-                    model="gpt-5.1",
-                    messages=[{"role": "user", "content": prompt + "\n\nReturn ONLY a JSON array of lowercase strings."}],
-                    temperature=0.0,
-                    response_format={"type": "json_object"}
-                )
-                content = response.choices[0].message.content
-                parsed = json.loads(content)
-                if "tags" in parsed:
-                    return {tag.lower().strip() for tag in parsed["tags"] if isinstance(tag, str) and tag.strip()}
+            tag_schema = get_tag_schema(LLM_TAG_COUNT)
+            parsed = extract_with_openai_structured_output(client, prompt, tag_schema, model="gpt-4")
+
+            if "tags" in parsed and isinstance(parsed["tags"], list):
+                # Success - reset failure counter
+                _llm_failure_count = 0
+                _llm_circuit_open = False
+                return {tag.lower().strip() for tag in parsed["tags"] if isinstance(tag, str) and tag.strip()}
+
+            logger.warning("Invalid tags format in OpenAI response")
+            _llm_failure_count += 1
+            if _llm_failure_count >= FAILURE_THRESHOLD:
+                _llm_circuit_open = True
+                logger.error(f"LLM circuit breaker opened after {_llm_failure_count} consecutive failures")
+            return set()
         else:
             logger.warning("Unknown LLM client type: %s", type(client))
             return set()
@@ -158,6 +175,10 @@ Text: {sample}"""
 
     except Exception as exc:  # pragma: no cover
         logger.warning("LLM tag extraction failed: %s", exc)
+        _llm_failure_count += 1
+        if _llm_failure_count >= FAILURE_THRESHOLD:
+            _llm_circuit_open = True
+            logger.error(f"LLM circuit breaker opened after {_llm_failure_count} consecutive failures")
         return set()
 
 

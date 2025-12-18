@@ -9,6 +9,7 @@ from pinecone_client import index
 from config import EMBEDDING_MODEL, CHUNK_SIZE, CHUNK_OVERLAP
 from logger import logger
 from semantic_tags import extract_semantic_tags
+from exceptions import CircuitBreakerOpenError
 
 def clean_text(text: str) -> str:
     """Clean and normalize text while keeping symbols like +/# for skills."""
@@ -129,12 +130,14 @@ def upsert_doc(
     
     # Split into chunks
     chunks = chunk_text(doc_text)
-    
+
     # Prepare vectors and metadata
     vectors = []
+    circuit_breaker_triggered = False
+
     for i, chunk in enumerate(chunks):
         chunk_id = f"{doc_id}_chunk_{i}"
-        
+
         # Get embedding
         if EMBEDDING_MODEL and (EMBEDDING_MODEL.startswith("nvidia") or EMBEDDING_MODEL.startswith("llama") or EMBEDDING_MODEL == "text-embedding-3-small"):
             vec = get_embedding(chunk, EMBEDDING_MODEL)
@@ -143,7 +146,7 @@ def upsert_doc(
                 vec = vec.astype("float32").tolist()
         else:
             vec = None  # Let Pinecone handle embedding
-            
+
         # Create metadata
         metadata = {
             "text": chunk,
@@ -156,10 +159,17 @@ def upsert_doc(
         if metadata_extra:
             metadata.update(metadata_extra)
 
-        tags = extract_semantic_tags(chunk)
-        if tags:
-            metadata["semantic_tags"] = tags
-        
+        # Try to extract semantic tags, but continue without them if circuit breaker triggers
+        try:
+            tags = extract_semantic_tags(chunk)
+            if tags:
+                metadata["semantic_tags"] = tags
+        except CircuitBreakerOpenError:
+            # Circuit breaker triggered - skip tags but continue indexing chunks
+            if not circuit_breaker_triggered:
+                logger.warning(f"Tag extraction circuit breaker triggered for {doc_id}, continuing without tags")
+                circuit_breaker_triggered = True
+
         vectors.append({
             "id": chunk_id,
             "values": vec,
@@ -203,4 +213,8 @@ def upsert_doc(
             upserted_count if upserted_count is not None else len(batch),
         )
 
-    return {"chunks": len(vectors), "upserted": upserted_total}
+    return {
+        "chunks": len(vectors),
+        "upserted": upserted_total,
+        "circuit_breaker_triggered": circuit_breaker_triggered
+    }
