@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 
 const DEFAULT_NAMESPACE = 'default'
@@ -41,6 +41,21 @@ function App() {
     return trimmed.length > 0 ? trimmed : DEFAULT_NAMESPACE
   }, [namespace])
 
+  // Auto-clear namespace on load for fresh session
+  useEffect(() => {
+    const clearOnLoad = async () => {
+      try {
+        await fetch(`${API_BASE_URL}/debug/namespace/${encodeURIComponent(sanitizedNamespace)}`, {
+          method: 'DELETE',
+        })
+        console.log('Namespace cleared on load')
+      } catch (error) {
+        console.warn('Failed to clear namespace on load:', error)
+      }
+    }
+    clearOnLoad()
+  }, []) // Empty deps - only run once on mount
+
   const handleFileSelection = (event) => {
     const file = event.target.files?.[0]
     setSelectedFiles(file ? [file] : [])
@@ -50,53 +65,54 @@ function App() {
     setClearError('')
   }
 
-  const handleNamespaceBlur = () => {
-    if (!namespace.trim()) {
-      setNamespace(DEFAULT_NAMESPACE)
-    }
-  }
+  // Namespace management functions (commented out - auto-isolated per session now)
+  // const handleNamespaceBlur = () => {
+  //   if (!namespace.trim()) {
+  //     setNamespace(DEFAULT_NAMESPACE)
+  //   }
+  // }
 
-  const handleClearNamespace = async () => {
-    if (isClearing) return
-    const ns = sanitizedNamespace
-    const confirmed = window.confirm(`Delete all indexed vectors in namespace "${ns}"? This cannot be undone.`)
-    if (!confirmed) return
+  // const handleClearNamespace = async () => {
+  //   if (isClearing) return
+  //   const ns = namespace
+  //   const confirmed = window.confirm(`Delete all indexed vectors in namespace "${ns}"? This cannot be undone.`)
+  //   if (!confirmed) return
 
-    setIsClearing(true)
-    setClearMessage('')
-    setClearError('')
+  //   setIsClearing(true)
+  //   setClearMessage('')
+  //   setClearError('')
 
-    try {
-      const response = await fetch(`${API_BASE_URL}/debug/namespace/${encodeURIComponent(ns)}`, {
-        method: 'DELETE',
-      })
+  //   try {
+  //     const response = await fetch(`${API_BASE_URL}/debug/namespace/${encodeURIComponent(ns)}`, {
+  //       method: 'DELETE',
+  //     })
 
-      if (!response.ok) {
-        const detail = await response.json().catch(() => ({}))
-        throw new Error(detail?.detail || `Failed to clear namespace (status ${response.status})`)
-      }
+  //     if (!response.ok) {
+  //       const detail = await response.json().catch(() => ({}))
+  //       throw new Error(detail?.detail || `Failed to clear namespace (status ${response.status})`)
+  //     }
 
-      const data = await response.json().catch(() => ({}))
-      const clearedNamespace = data?.namespace ?? ns
-      if (data?.warning || data?.vectors_deleted === false) {
-        setClearMessage(`Namespace "${clearedNamespace}" already empty. Cache cleared for good measure.`)
-      } else {
-        setClearMessage(`Namespace "${clearedNamespace}" cleared.`)
-      }
-      setUploadSummary(null)
-      setMessages([])
-    } catch (error) {
-      const fallbackMessage = `Namespace "${ns}" cleared (best effort).`
-      if (error?.message?.toLowerCase().includes('failed to fetch')) {
-        console.warn('Clear namespace request failed, assuming already empty.', error)
-        setClearMessage(fallbackMessage)
-      } else {
-        setClearError(error?.message || 'Unexpected error while clearing namespace.')
-      }
-    } finally {
-      setIsClearing(false)
-    }
-  }
+  //     const data = await response.json().catch(() => ({}))
+  //     const clearedNamespace = data?.namespace ?? ns
+  //     if (data?.warning || data?.vectors_deleted === false) {
+  //       setClearMessage(`Namespace "${clearedNamespace}" already empty. Cache cleared for good measure.`)
+  //     } else {
+  //       setClearMessage(`Namespace "${clearedNamespace}" cleared.`)
+  //     }
+  //     setUploadSummary(null)
+  //     setMessages([])
+  //   } catch (error) {
+  //     const fallbackMessage = `Namespace "${ns}" cleared (best effort).`
+  //     if (error?.message?.toLowerCase().includes('failed to fetch')) {
+  //       console.warn('Clear namespace request failed, assuming already empty.', error)
+  //       setClearMessage(fallbackMessage)
+  //     } else {
+  //       setClearError(error?.message || 'Unexpected error while clearing namespace.')
+  //     }
+  //   } finally {
+  //     setIsClearing(false)
+  //   }
+  // }
 
   const handleUpload = async () => {
     if (!selectedFiles.length) {
@@ -415,7 +431,8 @@ function App() {
           <p className="tagline">Upload documents, then ask questions about them.</p>
         </header>
 
-        <section className="namespace-section">
+        {/* Namespace section (hidden - auto-isolated per session now) */}
+        {/* <section className="namespace-section">
           <div className="namespace-header">
             <label htmlFor="namespace">Namespace</label>
             <button
@@ -439,7 +456,7 @@ function App() {
           <p className="field-hint">Use namespaces to keep document sets separate. Leave as "default" for a single corpus.</p>
           {clearMessage ? <p className="success-message namespace-message">{clearMessage}</p> : null}
           {clearError ? <p className="error-message namespace-message">{clearError}</p> : null}
-        </section>
+        </section> */}
 
         <section className="upload-section">
           <h2>Document Upload</h2>
