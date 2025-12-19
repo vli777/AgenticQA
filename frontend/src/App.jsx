@@ -12,7 +12,7 @@ function App() {
   const [isUploading, setIsUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0, fileName: '', status: '', step: 0, totalSteps: 0 })
   const [messages, setMessages] = useState([])
-  const [queuedQueries, setQueuedQueries] = useState([])
+  const [_, setQueuedQueries] = useState([])
   const [inputValue, setInputValue] = useState('')
   const [isSending, setIsSending] = useState(false)
   const [chatError, setChatError] = useState('')
@@ -314,7 +314,7 @@ function App() {
       const newQueue = [...queuedQueriesRef.current, question]
       console.log('Queue updated. New queue length:', newQueue.length)
       updateQueuedQueries(newQueue)
-      setStreamingStatus('Waiting for upload to complete...')
+      setStreamingStatus('Patience grasshopper! Waiting for upload to complete...')
       appendMessage({ role: 'user', content: question })
       setInputValue('')
       return
@@ -376,10 +376,10 @@ function App() {
         if (batch.length === 1) {
           await sendQuery(batch[0])
         } else {
-          const combinedQuery = batch.map((q, idx) => `${idx + 1}. ${q}`).join('\n\n')
-          const wrappedQuery = `Please answer the following questions:\n\n${combinedQuery}`
-          console.log('Combined query:', wrappedQuery)
-          await sendQuery(wrappedQuery)
+          // Send queries as newline-separated, no wrapping or numbering
+          const combinedQuery = batch.join('\n')
+          console.log('Combined query:', combinedQuery)
+          await sendQuery(combinedQuery)
         }
 
         // Small delay between batches
