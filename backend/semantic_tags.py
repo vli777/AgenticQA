@@ -64,6 +64,13 @@ class TagList(BaseModel):
     )
 
 
+class BatchTagList(BaseModel):
+    """Structured output for batch semantic tag extraction."""
+    chunks: List[TagList] = Field(
+        description="Array of tag lists, one for each input chunk"
+    )
+
+
 def _sanitize_text(sample: str, limit: int = 750) -> str:
     sample = sample.strip()
     if len(sample) > limit:
@@ -236,6 +243,155 @@ def extract_semantic_tags(text: str) -> List[str]:
         tags |= _zero_shot_tags(text)
 
     return sorted(tags)
+
+
+def extract_semantic_tags_batch(texts: List[str], batch_size: int = 10) -> List[List[str]]:
+    """
+    Extract semantic tags for multiple chunks in batches (optimization).
+
+    Args:
+        texts: List of text chunks to extract tags from
+        batch_size: Number of chunks to process in each LLM call
+
+    Returns:
+        List of tag lists, one for each input text
+    """
+    global _llm_failure_count, _llm_circuit_open
+
+    if not texts:
+        return []
+
+    # Circuit breaker: if open, fall back to empty tags for all
+    if _llm_circuit_open:
+        logger.error(f"LLM circuit breaker open, returning empty tags for {len(texts)} chunks")
+        raise CircuitBreakerOpenError("An error occurred during document indexing")
+
+    client = _llm_client()
+    if not client:
+        # No LLM client available, return empty tags
+        return [[] for _ in texts]
+
+    all_results: List[List[str]] = []
+
+    # Process in batches
+    for batch_start in range(0, len(texts), batch_size):
+        batch_texts = texts[batch_start:batch_start + batch_size]
+        batch_results = []
+
+        try:
+            # Sanitize and prepare batch
+            sanitized = [_sanitize_text(t, limit=500) for t in batch_texts]
+
+            # Build prompt for batch
+            chunks_text = ""
+            for i, chunk in enumerate(sanitized):
+                chunks_text += f"\n\nCHUNK {i+1}:\n{chunk}"
+
+            prompt = f"""Extract {LLM_TAG_COUNT} relevant keywords or topic tags from each of the following text chunks.
+Focus on: key concepts, topics, technologies, domains, or categories mentioned.
+
+Return a JSON array with one entry per chunk, where each entry contains a 'tags' array.
+{chunks_text}"""
+
+            # Use NVIDIA's guided_json for structured output
+            if hasattr(client, "invoke"):
+                # Create schema for batch processing
+                batch_schema = {
+                    "type": "object",
+                    "properties": {
+                        "chunks": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "tags": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                        "minItems": 1,
+                                        "maxItems": LLM_TAG_COUNT
+                                    }
+                                },
+                                "required": ["tags"]
+                            },
+                            "minItems": len(batch_texts),
+                            "maxItems": len(batch_texts)
+                        }
+                    },
+                    "required": ["chunks"]
+                }
+
+                parsed = extract_with_nvidia_guided_json(client, prompt, batch_schema)
+
+                if "chunks" in parsed and isinstance(parsed["chunks"], list):
+                    # Success - reset failure counter
+                    _llm_failure_count = 0
+                    _llm_circuit_open = False
+
+                    for chunk_data in parsed["chunks"]:
+                        if "tags" in chunk_data and isinstance(chunk_data["tags"], list):
+                            tags = sorted({tag.lower().strip() for tag in chunk_data["tags"] if isinstance(tag, str) and tag.strip()})
+                            batch_results.append(tags)
+                        else:
+                            batch_results.append([])
+                else:
+                    logger.warning("Invalid batch tags format in response")
+                    batch_results = [[] for _ in batch_texts]
+
+            # Handle OpenAI
+            elif hasattr(client, "chat"):
+                batch_schema = {
+                    "type": "object",
+                    "properties": {
+                        "chunks": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "tags": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                        "minItems": 1,
+                                        "maxItems": LLM_TAG_COUNT
+                                    }
+                                },
+                                "required": ["tags"]
+                            }
+                        }
+                    },
+                    "required": ["chunks"]
+                }
+
+                parsed = extract_with_openai_structured_output(client, prompt, batch_schema, model="gpt-4")
+
+                if "chunks" in parsed and isinstance(parsed["chunks"], list):
+                    # Success - reset failure counter
+                    _llm_failure_count = 0
+                    _llm_circuit_open = False
+
+                    for chunk_data in parsed["chunks"]:
+                        if "tags" in chunk_data and isinstance(chunk_data["tags"], list):
+                            tags = sorted({tag.lower().strip() for tag in chunk_data["tags"] if isinstance(tag, str) and tag.strip()})
+                            batch_results.append(tags)
+                        else:
+                            batch_results.append([])
+                else:
+                    logger.warning("Invalid batch tags format in OpenAI response")
+                    batch_results = [[] for _ in batch_texts]
+            else:
+                logger.warning("Unknown LLM client type: %s", type(client))
+                batch_results = [[] for _ in batch_texts]
+
+        except Exception as exc:
+            logger.warning(f"Batch tag extraction failed for batch starting at {batch_start}: {exc}")
+            _llm_failure_count += 1
+            if _llm_failure_count >= FAILURE_THRESHOLD:
+                _llm_circuit_open = True
+                logger.error(f"LLM circuit breaker opened after {_llm_failure_count} consecutive failures")
+            batch_results = [[] for _ in batch_texts]
+
+        all_results.extend(batch_results)
+
+    return all_results
 
 
 @lru_cache(maxsize=512)
