@@ -3,7 +3,7 @@
   AgenticQA is a document-centric Q&A system that feels like a careful research assistant. Upload PDF or text files, ask
   natural language questions, and receive answers that cite supporting passages. The backend runs a conversation-aware
   retrieval agent that plans searches, rewrites follow-up questions, and verifies every response against the evidence
-  before replying.
+  before replying. It uses streaming responses with SSE + EventSource to surface LLM activity status. 
   
 <img width="1012" height="798" alt="image" src="https://github.com/user-attachments/assets/5c6d2b45-0d82-4f3f-8ab6-0e84f7150764" />
 
@@ -29,7 +29,7 @@
 
   ## Key Features
 
-  - Upload PDF or TXT documents directly from the chat interface.
+  - Upload PDF, Word, or text documents directly from the chat interface.
   - NVIDIA-optimized retrieval (nvidia/llama-3.2-nv-embedqa-1b-v2 + nvidia/llama-3.2-nv-rerankqa-1b-v2, 2048-dim embeddings) with 86.83% recall, Pinecone storage, and sentence-level chunking.
   - NVIDIA hosted embeddings and reranking for minimal Docker image size (~500MB vs 8GB+ with local models).
   - Per-topic conversational memory that automatically rewrites follow-up questions before retrieval.
