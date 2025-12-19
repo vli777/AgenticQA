@@ -52,6 +52,16 @@ class VerificationVerdict(BaseModel):
     )
 
 
+class AnswerWithCitations(BaseModel):
+    """Structured output for answer with source citations."""
+    answer: str = Field(
+        description="The answer to the question based on the provided documents"
+    )
+    sources_used: List[str] = Field(
+        description="List of document filenames that were actually used to formulate the answer (only include documents that contributed to the answer)"
+    )
+
+
 # ---------------------------
 # Agent Tools
 # ---------------------------
@@ -446,6 +456,8 @@ def get_agent(namespace: str = "default", tools: list = None):
         # Step 1: Search summaries to identify relevant documents
         summary_results = search_summaries(query=question, namespace=namespace, top_k=3)
 
+        available_sources = []  # Track all available sources for citation
+
         if summary_results:
             logger.info(f"Found {len(summary_results)} relevant documents")
             reasoning.append(f"Found {len(summary_results)} relevant document(s)")
@@ -463,8 +475,8 @@ def get_agent(namespace: str = "default", tools: list = None):
                 full_text = fetch_full_document(doc_id, namespace, max_chunks=50)
 
                 if full_text:
-                    all_document_texts.append(f"=== Document: {source} ===\n\n{full_text}")
-                    sources.append(f"[{source}]")
+                    all_document_texts.append(f"[Document: {source}]\n\n{full_text}")
+                    available_sources.append(source)
 
             if all_document_texts:
                 # Combine full documents as evidence
@@ -473,11 +485,9 @@ def get_agent(namespace: str = "default", tools: list = None):
             else:
                 logger.info("Failed to fetch full documents, falling back to semantic search")
                 merged_evidence = ""
-                sources = []
         else:
             logger.info("No summaries found, using semantic search")
             merged_evidence = ""
-            sources = []
 
         # TIER 2: Fall back to full semantic search if summary search didn't yield results
         if not merged_evidence:
@@ -505,6 +515,7 @@ def get_agent(namespace: str = "default", tools: list = None):
         # Use more natural fallback language
         if verdict == "UNSUPPORTED":
             final_answer = "I don't see information about that in the documents."
+            sources = []
         elif verdict == "PARTIAL":
             # Still use the draft answer but acknowledge uncertainty
             final_answer = draft_answer
@@ -513,6 +524,28 @@ def get_agent(namespace: str = "default", tools: list = None):
                 final_answer = f"Based on the available information: {draft_answer}"
         else:  # SUPPORTED
             final_answer = draft_answer
+
+        # Extract which sources were actually used (only if we have document sources available)
+        if available_sources and verdict != "UNSUPPORTED":
+            try:
+                # Ask LLM which documents it actually used
+                citation_prompt = (
+                    f"You previously answered this question: {question}\n\n"
+                    f"Your answer was: {final_answer}\n\n"
+                    f"Available documents: {', '.join(available_sources)}\n\n"
+                    "Which of these documents did you actually use to formulate your answer? "
+                    "Only list documents that contributed information to the answer."
+                )
+                structured_llm = llm.with_structured_output(AnswerWithCitations)
+                citation_response = structured_llm.invoke(citation_prompt)
+                sources = [f"[{src}]" for src in citation_response.sources_used if src]
+                logger.info(f"LLM cited sources: {sources}")
+            except Exception as e:
+                logger.warning(f"Failed to extract source citations: {e}, using all available sources")
+                sources = [f"[{src}]" for src in available_sources]
+        elif not available_sources:
+            # For semantic search results, use extracted sources
+            sources = _extract_sources(merged_evidence, limit=5)
 
         if history:
             reasoning.append("Considered recent conversation context when forming query and answer.")
@@ -646,8 +679,11 @@ async def get_streaming_agent(namespace: str = "default"):
         # Compose answer with the full document context
         yield {"type": "reasoning", "content": "Reading and analyzing content..."}
 
-        # Build evidence text from full documents
-        evidence_text = "\n\n".join(full_document_texts)
+        # Build evidence text from full documents with source labels
+        evidence_parts = []
+        for i, (doc_text, source) in enumerate(zip(full_document_texts, sources_list)):
+            evidence_parts.append(f"[Document {i+1}: {source}]\n{doc_text}")
+        evidence_text = "\n\n".join(evidence_parts)
 
         prompt = (
             "You are a helpful assistant that answers questions based on document content.\n"
@@ -658,14 +694,25 @@ async def get_streaming_agent(namespace: str = "default"):
             "3. Do NOT describe how search or retrieval was done.\n"
             "4. If the document content clearly answers the question: give a direct, confident answer.\n"
             "5. If unclear or not found: say exactly 'I don't see information about that in the documents.'\n"
-            "6. Keep answers concise (1-3 sentences) and natural.\n\n"
+            "6. Keep answers concise (1-3 sentences) and natural.\n"
+            "7. In sources_used, ONLY list the document filenames that you actually used to formulate your answer.\n\n"
             f"Question: {question}\n\n"
             f"Document Content:\n{evidence_text}\n\n"
-            "Answer:"
+            "Provide your answer and cite which documents you actually used."
         )
 
-        response = llm.invoke(prompt)
-        answer = response.content.strip()
+        try:
+            # Use structured output to get answer with citations
+            structured_llm = llm.with_structured_output(AnswerWithCitations)
+            response = structured_llm.invoke(prompt)
+            answer = response.answer.strip()
+            actual_sources_used = response.sources_used or []
+        except Exception as e:
+            logger.warning(f"Structured output failed for citations: {e}, falling back")
+            # Fallback to plain response
+            response = llm.invoke(prompt)
+            answer = response.content.strip()
+            actual_sources_used = sources_list  # Use all sources as fallback
 
         if not answer:
             answer = "I don't see information about that in the documents."
@@ -683,9 +730,11 @@ async def get_streaming_agent(namespace: str = "default"):
         ]):
             logger.warning(f"Streaming answer contains meta-talk, replacing: '{answer[:100]}'")
             answer = "I don't see information about that in the documents."
+            actual_sources_used = []
 
-        # Log sources (not sent to frontend)
-        sources_log = [{"source": source} for source in sources_list]
+        # Only include sources that were actually used by the LLM
+        sources_log = [{"source": source} for source in actual_sources_used if source]
+        logger.info(f"[Sources] {sources_log}")
 
         yield {"type": "answer", "content": answer, "sources": sources_log}
 
