@@ -84,8 +84,6 @@ async def upload_documents_stream(
                 # Send progress: chunking
                 yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total_files, 'file_name': name, 'step': 2, 'total_steps': 6, 'status': 'Chunking text...'})}\n\n"
 
-                from services import clean_text
-                text = clean_text(text)
                 chunks = chunk_text(text)
 
                 # Send progress: generating summary
@@ -127,7 +125,7 @@ async def upload_documents_stream(
                 yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total_files, 'file_name': name, 'step': 6, 'total_steps': 6, 'status': 'Indexing chunks...'})}\n\n"
 
                 result = upsert_doc(
-                    text,
+                    chunks=chunks,
                     doc_id=safe_doc_id,
                     source=name,
                     namespace=namespace,

@@ -1,20 +1,33 @@
 # backend/services.py
 
 import numpy as np
-import re
 from typing import List, Dict, Any, Optional
+from collections import deque
 
-from utils import get_embedding
+from utils import get_embedding, get_embeddings_batch
 from pinecone_client import index
 from config import EMBEDDING_MODEL, CHUNK_SIZE, CHUNK_OVERLAP
 from logger import logger
-from semantic_tags import extract_semantic_tags
+from semantic_tags import extract_semantic_tags, extract_semantic_tags_batch
 from exceptions import CircuitBreakerOpenError
+from patterns import (
+    WHITESPACE_PATTERN,
+    SPECIAL_CHARS_PATTERN,
+    PARAGRAPH_SPLIT_PATTERN,
+    SENTENCE_SPLIT_PATTERN,
+    NUMBERS_ONLY_PATTERN,
+    NAME_PATTERN,
+    URL_PATTERN,
+    ARXIV_PATTERN,
+    DIGITS_ONLY_PATTERN,
+    PUNCTUATION_PATTERN,
+    WORD_PATTERN,
+)
 
 def clean_text(text: str) -> str:
     """Clean and normalize text while keeping symbols like +/# for skills."""
-    text = re.sub(r'\s+', ' ', text)
-    text = re.sub(r'[^\w\s.,!?+#/-]', '', text)
+    text = WHITESPACE_PATTERN.sub(' ', text)
+    text = SPECIAL_CHARS_PATTERN.sub('', text)
     return text.strip()
 
 def is_meaningful_chunk(text: str) -> bool:
@@ -23,20 +36,20 @@ def is_meaningful_chunk(text: str) -> bool:
     if not text:
         return False
 
-    if re.match(r'^[\d\s.,]+$', text):
+    if NUMBERS_ONLY_PATTERN.match(text):
         return False
-    if re.match(r'^[A-Z][a-z]+\s+[A-Z][a-z]+(\s+[A-Z][a-z]+)*$', text):
+    if NAME_PATTERN.match(text):
         return False
-    if re.match(r'^.*\d{4}\.?\s+URL\s+https?://.*$', text):
+    if URL_PATTERN.match(text):
         return False
-    if re.match(r'^.*arXiv:?\d{4}\.\d{4,5}.*$', text):
+    if ARXIV_PATTERN.match(text):
         return False
-    if re.match(r'^\d+$', text):
+    if DIGITS_ONLY_PATTERN.match(text):
         return False
 
     # Allow short bullet lists / skill inventories without punctuation
-    if not re.search(r'[.!?]', text):
-        tokens = re.findall(r'\b[\w+#]+\b', text)
+    if not PUNCTUATION_PATTERN.search(text):
+        tokens = WORD_PATTERN.findall(text)
         unique_terms = len(set(t.lower() for t in tokens))
         capitalized_terms = len([t for t in tokens if t and t[0].isupper()])
         if unique_terms == 0 and capitalized_terms == 0:
@@ -62,14 +75,16 @@ def chunk_text(text: str, chunk_size: int = None, chunk_overlap: int = None) -> 
         chunk_overlap / chunk_size * 100,
     )
 
-    raw_sections = re.split(r'\n\s*\n', text)
+    # Clean text once before splitting
+    text = clean_text(text)
+
+    raw_sections = PARAGRAPH_SPLIT_PATTERN.split(text)
     sentences: List[str] = []
     for section in raw_sections:
-        section = clean_text(section)
         if not section:
             continue
         # Split into sentences but keep bullet-like fragments
-        parts = re.split(r'(?<=[.!?])\s+|•\s+', section)
+        parts = SENTENCE_SPLIT_PATTERN.split(section)
         for part in parts:
             part = part.strip()
             if part:
@@ -86,17 +101,17 @@ def chunk_text(text: str, chunk_size: int = None, chunk_overlap: int = None) -> 
             if is_meaningful_chunk(chunk_text_value):
                 chunks.append(chunk_text_value)
 
-            # Build overlap from the tail sentences
-            overlap_sentences: List[str] = []
+            # Build overlap from the tail sentences (using deque for O(1) insertions)
+            overlap_sentences = deque()
             overlap_len = 0
             for prev_sentence in reversed(current_sentences):
                 prev_len = len(prev_sentence) + 1
                 if overlap_len + prev_len > chunk_overlap:
                     break
-                overlap_sentences.insert(0, prev_sentence)
+                overlap_sentences.appendleft(prev_sentence)
                 overlap_len += prev_len
 
-            current_sentences = overlap_sentences.copy()
+            current_sentences = list(overlap_sentences)
             current_len = overlap_len
 
         current_sentences.append(sentence)
@@ -110,7 +125,7 @@ def chunk_text(text: str, chunk_size: int = None, chunk_overlap: int = None) -> 
     return chunks
 
 def upsert_doc(
-    doc_text: str,
+    chunks: List[str],
     doc_id: str,
     source: str = "unknown",
     namespace: str = "default",
@@ -118,34 +133,58 @@ def upsert_doc(
 ):
     """
     Upsert a document to Pinecone with proper chunking and metadata.
-    
+
     Args:
-        doc_text: The text content of the document
+        chunks: Pre-computed text chunks
         doc_id: Unique identifier for the document
         source: Source of the document (e.g., filename)
         namespace: Pinecone namespace
+        metadata_extra: Additional metadata to add to all chunks
     """
-    # Clean the text
-    doc_text = clean_text(doc_text)
-    
-    # Split into chunks
-    chunks = chunk_text(doc_text)
 
     # Prepare vectors and metadata
     vectors = []
     circuit_breaker_triggered = False
 
+    # Generate embeddings for all chunks at once (parallel optimization)
+    embeddings = []
+    if EMBEDDING_MODEL and (EMBEDDING_MODEL.startswith("nvidia") or EMBEDDING_MODEL.startswith("llama") or EMBEDDING_MODEL == "text-embedding-3-small"):
+        logger.info(f"Generating embeddings for {len(chunks)} chunks using batch processing")
+        try:
+            embeddings = get_embeddings_batch(chunks, EMBEDDING_MODEL)
+            # Convert numpy arrays to lists if necessary
+            embeddings = [
+                emb.astype("float32").tolist() if isinstance(emb, np.ndarray) else emb
+                for emb in embeddings
+            ]
+        except Exception as e:
+            logger.warning(f"Batch embedding failed, falling back to sequential: {e}")
+            # Fallback to sequential if batch fails
+            for chunk in chunks:
+                vec = get_embedding(chunk, EMBEDDING_MODEL)
+                if isinstance(vec, np.ndarray):
+                    vec = vec.astype("float32").tolist()
+                embeddings.append(vec)
+    else:
+        # Let Pinecone handle embedding
+        embeddings = [None] * len(chunks)
+
+    # Extract semantic tags for all chunks in batch (optimization)
+    all_tags = []
+    try:
+        logger.info(f"Extracting semantic tags for {len(chunks)} chunks using batch processing")
+        all_tags = extract_semantic_tags_batch(chunks, batch_size=10)
+    except CircuitBreakerOpenError:
+        logger.warning(f"Tag extraction circuit breaker triggered for {doc_id}, continuing without tags")
+        circuit_breaker_triggered = True
+        all_tags = [[] for _ in chunks]
+    except Exception as e:
+        logger.warning(f"Batch tag extraction failed, skipping tags: {e}")
+        all_tags = [[] for _ in chunks]
+
+    # Build vectors with embeddings and metadata
     for i, chunk in enumerate(chunks):
         chunk_id = f"{doc_id}_chunk_{i}"
-
-        # Get embedding
-        if EMBEDDING_MODEL and (EMBEDDING_MODEL.startswith("nvidia") or EMBEDDING_MODEL.startswith("llama") or EMBEDDING_MODEL == "text-embedding-3-small"):
-            vec = get_embedding(chunk, EMBEDDING_MODEL)
-            # Convert numpy → list if necessary
-            if isinstance(vec, np.ndarray):
-                vec = vec.astype("float32").tolist()
-        else:
-            vec = None  # Let Pinecone handle embedding
 
         # Create metadata
         metadata = {
@@ -159,20 +198,13 @@ def upsert_doc(
         if metadata_extra:
             metadata.update(metadata_extra)
 
-        # Try to extract semantic tags, but continue without them if circuit breaker triggers
-        try:
-            tags = extract_semantic_tags(chunk)
-            if tags:
-                metadata["semantic_tags"] = tags
-        except CircuitBreakerOpenError:
-            # Circuit breaker triggered - skip tags but continue indexing chunks
-            if not circuit_breaker_triggered:
-                logger.warning(f"Tag extraction circuit breaker triggered for {doc_id}, continuing without tags")
-                circuit_breaker_triggered = True
+        # Add semantic tags if available
+        if i < len(all_tags) and all_tags[i]:
+            metadata["semantic_tags"] = all_tags[i]
 
         vectors.append({
             "id": chunk_id,
-            "values": vec,
+            "values": embeddings[i],
             "metadata": metadata
         })
     
