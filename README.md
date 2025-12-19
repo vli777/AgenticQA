@@ -5,8 +5,8 @@
   retrieval agent that plans searches, rewrites follow-up questions, and verifies every response against the evidence
   before replying.
   
-<img width="1518" height="1052" alt="Screenshot 2025-12-15 163059" src="https://github.com/user-attachments/assets/1f65b342-3786-485f-bb09-7b8e6f139420" />
-<img width="1542" height="1068" alt="Screenshot 2025-12-15 163109" src="https://github.com/user-attachments/assets/4cb128d0-b8ea-4977-ac33-c4b62a2a571c" />
+<img width="1012" height="798" alt="image" src="https://github.com/user-attachments/assets/5c6d2b45-0d82-4f3f-8ab6-0e84f7150764" />
+
 
   ---
 
