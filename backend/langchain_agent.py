@@ -586,10 +586,12 @@ async def get_streaming_agent(namespace: str = "default"):
     async def stream_invoke(inputs: Dict[str, Any] | str):
         # Normalize input
         history: List[Dict[str, str]] = []
+        search_query = None
         if isinstance(inputs, str):
             question = inputs
         elif isinstance(inputs, dict):
             question = inputs.get("input") or inputs.get("question")
+            search_query = inputs.get("search_query")  # Optional: separate query for search
             history = inputs.get("chat_history") or []
             if not isinstance(question, str):
                 question = next((v for v in inputs.values() if isinstance(v, str)), "")
@@ -597,6 +599,9 @@ async def get_streaming_agent(namespace: str = "default"):
             raise ValueError("Unsupported input type for agent")
 
         question = (question or "").strip()
+        # If no separate search query provided, use the main question
+        if not search_query:
+            search_query = question
 
         # Strip quotes
         if question.startswith('"') and question.endswith('"'):
@@ -642,7 +647,7 @@ async def get_streaming_agent(namespace: str = "default"):
         # DOCUMENT-FIRST SEARCH with inline citations
         yield {"type": "reasoning", "content": "Searching for relevant documents..."}
 
-        summary_results = search_summaries(query=question, namespace=namespace, top_k=3)
+        summary_results = search_summaries(query=search_query, namespace=namespace, top_k=3)
 
         full_document_texts = []
         sources_list = []
@@ -665,7 +670,7 @@ async def get_streaming_agent(namespace: str = "default"):
         if not full_document_texts:
             yield {"type": "reasoning", "content": "Using semantic search..."}
 
-            obs = search_tool(question)
+            obs = search_tool(search_query)
 
             # Use semantic search results as fallback
             if isinstance(obs, str) and obs.strip() and obs.strip().lower() not in {"no results.", "no meaningful text chunks found."}:

@@ -154,7 +154,12 @@ async def ask(
             agent_generator = await get_streaming_agent(namespace=namespace)
 
             # Stream reasoning steps and final answer
-            async for event in agent_generator({"input": standalone_question, "chat_history": topic_history}):
+            # Pass original question for answering, standalone for search
+            async for event in agent_generator({
+                "input": question,
+                "search_query": standalone_question,
+                "chat_history": topic_history
+            }):
                 if event["type"] == "reasoning":
                     # Single-line status update (will be replaced in UI)
                     yield f"data: {json.dumps({'type': 'reasoning', 'content': event['content']})}\n\n"
