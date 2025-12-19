@@ -28,6 +28,13 @@ function App() {
   }, [])
 
   const fileInputRef = useRef(null)
+  const queuedQueriesRef = useRef([])
+
+  // Keep ref in sync with state
+  const updateQueuedQueries = (newQueue) => {
+    queuedQueriesRef.current = newQueue
+    setQueuedQueries(newQueue)
+  }
 
   const sanitizedNamespace = useMemo(() => {
     const trimmed = namespace.trim()
@@ -181,7 +188,14 @@ function App() {
 
     // Process any queued queries now that upload is complete
     // Must be after isUploading is set to false
-    await processQueuedQueries()
+    console.log('Upload complete, checking for queued queries. Queue length:', queuedQueriesRef.current.length)
+    if (queuedQueriesRef.current.length > 0) {
+      console.log('Processing queued queries after upload')
+      await processQueuedQueries()
+    } else {
+      console.log('No queued queries to process')
+      setStreamingStatus('')
+    }
   }
 
   const appendMessage = (message) => {
@@ -296,11 +310,11 @@ function App() {
 
     // If uploading, queue the query instead of sending immediately
     if (isUploading) {
-      setQueuedQueries(prev => {
-        const newQueue = [...prev, question]
-        setStreamingStatus(`Query queued (${newQueue.length} in queue). Will process after upload completes...`)
-        return newQueue
-      })
+      console.log('Upload in progress, queueing query:', question)
+      const newQueue = [...queuedQueriesRef.current, question]
+      console.log('Queue updated. New queue length:', newQueue.length)
+      updateQueuedQueries(newQueue)
+      setStreamingStatus('Waiting for upload to complete...')
       appendMessage({ role: 'user', content: question })
       setInputValue('')
       return
@@ -312,14 +326,15 @@ function App() {
   }
 
   const processQueuedQueries = async () => {
-    if (queuedQueries.length === 0) {
+    const currentQueue = queuedQueriesRef.current
+    if (currentQueue.length === 0) {
       setStreamingStatus('')
       return
     }
 
-    console.log('Processing queued queries:', queuedQueries.length)
-    const queries = [...queuedQueries]
-    setQueuedQueries([]) // Clear queue immediately
+    console.log('Processing queued queries:', currentQueue.length)
+    const queries = [...currentQueue]
+    updateQueuedQueries([]) // Clear queue immediately
 
     // Batch queries intelligently based on estimated token count
     // Rough estimate: 4 chars per token, max ~2000 tokens per batch for safety
