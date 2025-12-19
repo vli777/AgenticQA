@@ -80,7 +80,7 @@ async def upload_documents_stream(
                 text = text.strip()
                 if not text:
                     logger.warning("No text extracted from '%s' (namespace=%s)", name, namespace)
-                    yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total_files, 'file_name': name, 'status': 'Skipped (no text found)'})}\n\n"
+                    yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total_files, 'file_name': name, 'step': 1, 'total_steps': 6, 'status': 'Skipped (no text found)'})}\n\n"
                     continue
 
                 safe_doc_id = re.sub(r'[^a-zA-Z0-9]+', '_', name).strip('_').lower() or "document"
@@ -90,6 +90,9 @@ async def upload_documents_stream(
 
                 chunks = chunk_text(text)
 
+                # Report chunk count
+                yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total_files, 'file_name': name, 'step': 2, 'total_steps': 6, 'status': f'Created {len(chunks)} chunks'})}\n\n"
+
                 processed_docs.append({
                     'name': name,
                     'doc_id': safe_doc_id,
@@ -97,11 +100,10 @@ async def upload_documents_stream(
                 })
 
             # PHASE 2: Batch generate summaries for all documents
+            summaries_map = {}
             if processed_docs:
-                yield f"data: {json.dumps({'type': 'progress', 'status': 'Generating summaries for all documents...'})}\n\n"
                 logger.info(f"Batch generating summaries for {len(processed_docs)} documents")
 
-                summaries_map = {}  # Maps doc_id to summary
                 try:
                     batch_docs = [{'doc_id': doc['doc_id'], 'chunks': doc['chunks'], 'source': doc['name']} for doc in processed_docs]
                     summaries_list = extract_structured_summaries_batch(batch_docs, namespace, batch_size=3)
@@ -118,11 +120,10 @@ async def upload_documents_stream(
 
             # PHASE 3: Batch store all summaries
             if summaries_map:
-                yield f"data: {json.dumps({'type': 'progress', 'status': 'Storing all summaries...'})}\n\n"
                 logger.info(f"Batch storing {len(summaries_map)} summaries")
                 store_document_summaries_batch(list(summaries_map.values()), namespace)
 
-            # PHASE 4: Detect overlap and index chunks
+            # PHASE 4: Store summaries, detect overlap, and index chunks
             for idx, doc in enumerate(processed_docs, start=1):
                 name = doc['name']
                 safe_doc_id = doc['doc_id']
@@ -130,9 +131,14 @@ async def upload_documents_stream(
 
                 summary = summaries_map.get(safe_doc_id)
 
-                if summary:
+                # Step 3: Generating summary (already done in batch, just show progress)
+                yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total_files, 'file_name': name, 'step': 3, 'total_steps': 6, 'status': 'Generated summary'})}\n\n"
 
-                    # Send progress: checking cross-doc overlap
+                # Step 4: Storing summary (already done in batch, just show progress)
+                yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total_files, 'file_name': name, 'step': 4, 'total_steps': 6, 'status': 'Stored summary'})}\n\n"
+
+                if summary:
+                    # Step 5: Checking cross-doc overlap
                     yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total_files, 'file_name': name, 'step': 5, 'total_steps': 6, 'status': 'Analyzing document relationships...'})}\n\n"
 
                     cross_summary = detect_cross_document_overlap(summary, namespace)
@@ -143,8 +149,8 @@ async def upload_documents_stream(
                         )
                         store_cross_document_summary(cross_summary, namespace)
 
-                # Send progress: indexing chunks
-                yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total_files, 'file_name': name, 'step': 6, 'total_steps': 6, 'status': 'Indexing chunks...'})}\n\n"
+                # Step 6: Indexing chunks
+                yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total_files, 'file_name': name, 'step': 6, 'total_steps': 6, 'status': f'Indexing {len(chunks)} chunks...'})}\n\n"
 
                 result = upsert_doc(
                     chunks=chunks,
@@ -161,7 +167,7 @@ async def upload_documents_stream(
                 file_vectors_upserted = result.get("upserted", 0)
                 indexing_circuit_breaker = result.get("circuit_breaker_triggered", False)
 
-                # Check if circuit breaker was triggered during indexing                
+                # Check if circuit breaker was triggered during indexing
                 if indexing_circuit_breaker:
                     logger.warning(f"Tag extraction circuit breaker triggered for '{name}', chunks indexed without semantic tags")
 
@@ -177,7 +183,11 @@ async def upload_documents_stream(
                 )
 
                 # Send progress: file complete
-                yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total_files, 'file_name': name, 'status': f'Complete ({file_chunks_indexed} chunks indexed)'})}\n\n"
+                actual_time = result.get("embedding_time", 0) + result.get("tag_time", 0)
+                if actual_time > 0:
+                    yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total_files, 'file_name': name, 'step': 6, 'total_steps': 6, 'status': f'Complete ({file_chunks_indexed} chunks indexed in {actual_time:.1f}s)'})}\n\n"
+                else:
+                    yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total_files, 'file_name': name, 'step': 6, 'total_steps': 6, 'status': f'Complete ({file_chunks_indexed} chunks indexed)'})}\n\n"
 
             logger.info(
                 "Upload request complete (namespace=%s, total_chunks=%s, warnings=%s)",

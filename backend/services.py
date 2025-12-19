@@ -148,8 +148,11 @@ def upsert_doc(
 
     # Generate embeddings for all chunks at once (parallel optimization)
     embeddings = []
+    embedding_time = 0
     if EMBEDDING_MODEL and (EMBEDDING_MODEL.startswith("nvidia") or EMBEDDING_MODEL.startswith("llama") or EMBEDDING_MODEL == "text-embedding-3-small"):
         logger.info(f"Generating embeddings for {len(chunks)} chunks using batch processing")
+        import time
+        start_time = time.time()
         try:
             embeddings = get_embeddings_batch(chunks, EMBEDDING_MODEL)
             # Convert numpy arrays to lists if necessary
@@ -157,6 +160,8 @@ def upsert_doc(
                 emb.astype("float32").tolist() if isinstance(emb, np.ndarray) else emb
                 for emb in embeddings
             ]
+            embedding_time = time.time() - start_time
+            logger.info(f"Batch embeddings completed in {embedding_time:.2f}s ({len(chunks)/embedding_time:.1f} chunks/sec)")
         except Exception as e:
             logger.warning(f"Batch embedding failed, falling back to sequential: {e}")
             # Fallback to sequential if batch fails
@@ -165,15 +170,20 @@ def upsert_doc(
                 if isinstance(vec, np.ndarray):
                     vec = vec.astype("float32").tolist()
                 embeddings.append(vec)
+            embedding_time = time.time() - start_time
     else:
         # Let Pinecone handle embedding
         embeddings = [None] * len(chunks)
 
     # Extract semantic tags for all chunks in batch (optimization)
     all_tags = []
+    tag_time = 0
     try:
         logger.info(f"Extracting semantic tags for {len(chunks)} chunks using batch processing")
+        start_time = time.time()
         all_tags = extract_semantic_tags_batch(chunks, batch_size=10)
+        tag_time = time.time() - start_time
+        logger.info(f"Batch tags completed in {tag_time:.2f}s ({len(chunks)/tag_time:.1f} chunks/sec)")
     except CircuitBreakerOpenError:
         logger.warning(f"Tag extraction circuit breaker triggered for {doc_id}, continuing without tags")
         circuit_breaker_triggered = True
@@ -209,6 +219,8 @@ def upsert_doc(
         })
     
     # Upsert in batches of 100
+    import time
+    upsert_start_time = time.time()
     batch_size = 100
     upserted_total = 0
     for i in range(0, len(vectors), batch_size):
@@ -245,8 +257,16 @@ def upsert_doc(
             upserted_count if upserted_count is not None else len(batch),
         )
 
+    upsert_time = time.time() - upsert_start_time
+    logger.info(f"Pinecone upsert completed in {upsert_time:.2f}s")
+
     return {
         "chunks": len(vectors),
         "upserted": upserted_total,
-        "circuit_breaker_triggered": circuit_breaker_triggered
+        "circuit_breaker_triggered": circuit_breaker_triggered,
+        "embedding_time": embedding_time,
+        "tag_time": tag_time,
+        "upsert_time": upsert_time,
+        "chunks_per_sec_embedding": len(chunks) / embedding_time if embedding_time > 0 else 0,
+        "chunks_per_sec_tags": len(chunks) / tag_time if tag_time > 0 else 0
     }
