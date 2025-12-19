@@ -44,6 +44,9 @@ VECTOR_DIMENSION = int(os.getenv("VECTOR_DIMENSION", "2048"))
 LLM_TAG_MODEL = os.getenv("LLM_TAG_MODEL", "meta/llama-3.3-70b-instruct")
 LLM_TAG_COUNT = int(os.getenv("LLM_TAG_COUNT", "5"))  # Number of tags to extract per chunk
 
+# Document summary extraction model
+LLM_SUMMARY_MODEL = os.getenv("LLM_SUMMARY_MODEL", "meta/llama-3.3-70b-instruct")
+
 # Zero-shot classification (optional fallback - only used if SEMANTIC_TAG_LABELS defined)
 HUGGINGFACE_ZS_MODEL = os.getenv("HUGGINGFACE_ZS_MODEL", "facebook/bart-large-mnli")
 _semantic_labels_raw = os.getenv("SEMANTIC_TAG_LABELS")

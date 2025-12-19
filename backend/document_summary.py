@@ -8,12 +8,12 @@ from pydantic import BaseModel, Field
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
 from logger import logger
 from pinecone_client import index, EMBED_DIM
-from config import EMBEDDING_MODEL
+from config import EMBEDDING_MODEL, LLM_SUMMARY_MODEL
 from utils import get_embedding
 from exceptions import CircuitBreakerOpenError
 from structured_output import get_document_summary_schema, extract_with_nvidia_guided_json
 
-llm = ChatNVIDIA(model="meta/llama-4-maverick-17b-128e-instruct", temperature=0.0)
+llm = ChatNVIDIA(model=LLM_SUMMARY_MODEL, temperature=0.0)
 
 # Circuit breaker for failed summary extractions
 _summary_failure_count = 0
