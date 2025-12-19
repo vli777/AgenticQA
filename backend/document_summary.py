@@ -13,7 +13,7 @@ from utils import get_embedding, get_embeddings_batch
 from exceptions import CircuitBreakerOpenError
 from structured_output import get_document_summary_schema, get_batch_document_summary_schema, extract_with_nvidia_guided_json
 
-llm = ChatNVIDIA(model=LLM_SUMMARY_MODEL, temperature=0.0)
+llm = ChatNVIDIA(model=LLM_SUMMARY_MODEL, temperature=0.0, max_tokens=8192)
 
 # Circuit breaker for failed summary extractions
 _summary_failure_count = 0
