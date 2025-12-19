@@ -141,11 +141,9 @@ async def upload_documents_stream(
                 file_vectors_upserted = result.get("upserted", 0)
                 indexing_circuit_breaker = result.get("circuit_breaker_triggered", False)
 
-                # Check if circuit breaker was triggered during indexing
+                # Check if circuit breaker was triggered during indexing                
                 if indexing_circuit_breaker:
-                    warning_msg = "An error occurred during document indexing. Results may be less accurate."
-                    warnings.append(warning_msg)
-                    yield f"data: {json.dumps({'type': 'warning', 'message': warning_msg})}\n\n"
+                    logger.warning(f"Tag extraction circuit breaker triggered for '{name}', chunks indexed without semantic tags")
 
                 total_chunks += file_chunks_indexed
 
