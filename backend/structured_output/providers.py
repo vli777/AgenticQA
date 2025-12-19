@@ -45,26 +45,41 @@ Return ONLY valid JSON matching this schema (no markdown, no explanations):
     try:
         return json.loads(response_text)
     except json.JSONDecodeError as e:
-        # Fallback: try to extract JSON from response (might be wrapped in markdown)
+        # Fallback: try to extract JSON from response (might be wrapped in markdown or have extra text)
         logger.debug(f"Direct JSON parse failed: {e}. Attempting to extract JSON from response.")
         logger.debug(f"Response text: {response_text[:500]}")  # Log first 500 chars for debugging
 
-        # Try to find JSON object in the response
+        # Use JSONDecoder.raw_decode to get the first valid JSON object (handles extra text after JSON)
+        try:
+            decoder = json.JSONDecoder()
+            obj, idx = decoder.raw_decode(response_text.lstrip())
+            logger.debug(f"Successfully extracted JSON using raw_decode (parsed {idx} chars)")
+            return obj
+        except (json.JSONDecodeError, ValueError) as raw_decode_error:
+            logger.debug(f"raw_decode failed: {raw_decode_error}. Trying regex extraction.")
+
+        # Try to find JSON object in the response using regex
         json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
         if json_match:
-            return json.loads(json_match.group())
+            try:
+                return json.loads(json_match.group())
+            except json.JSONDecodeError:
+                pass
 
         # Try to find JSON array in the response
         array_match = re.search(r'\[.*\]', response_text, re.DOTALL)
         if array_match:
-            result = json.loads(array_match.group())
-            # If schema expects object but we got array, wrap it
-            if isinstance(result, list) and schema.get("type") == "object":
-                # Check if the array items match a property name
-                for prop_name, prop_schema in schema.get("properties", {}).items():
-                    if prop_schema.get("type") == "array":
-                        return {prop_name: result}
-            return result
+            try:
+                result = json.loads(array_match.group())
+                # If schema expects object but we got array, wrap it
+                if isinstance(result, list) and schema.get("type") == "object":
+                    # Check if the array items match a property name
+                    for prop_name, prop_schema in schema.get("properties", {}).items():
+                        if prop_schema.get("type") == "array":
+                            return {prop_name: result}
+                return result
+            except json.JSONDecodeError:
+                pass
 
         # Re-raise original error if we couldn't extract JSON
         raise e
