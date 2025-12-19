@@ -5,8 +5,7 @@
   retrieval agent that plans searches, rewrites follow-up questions, and verifies every response against the evidence
   before replying. It uses streaming responses with SSE + EventSource to surface LLM activity status. 
   
-<img width="1012" height="798" alt="image" src="https://github.com/user-attachments/assets/5c6d2b45-0d82-4f3f-8ab6-0e84f7150764" />
-
+<img width="1189" height="746" alt="image" src="https://github.com/user-attachments/assets/757c7089-c9d1-4c78-b62e-c1424e8b5dec" />
 
   ---
 
