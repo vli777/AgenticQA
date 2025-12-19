@@ -41,22 +41,34 @@ Return ONLY valid JSON matching this schema (no markdown, no explanations):
 
     response_text = response.content if hasattr(response, 'content') else str(response)
 
+    # Strip markdown code fences if present
+    response_text = response_text.strip()
+    if response_text.startswith('```'):
+        # Remove opening fence (```json or ```)
+        lines = response_text.split('\n')
+        if lines[0].startswith('```'):
+            lines = lines[1:]
+        # Remove closing fence
+        if lines and lines[-1].strip() == '```':
+            lines = lines[:-1]
+        response_text = '\n'.join(lines)
+
     # Try direct parsing first
     try:
         return json.loads(response_text)
     except json.JSONDecodeError as e:
         # Fallback: try to extract JSON from response (might be wrapped in markdown or have extra text)
-        logger.debug(f"Direct JSON parse failed: {e}. Attempting to extract JSON from response.")
-        logger.debug(f"Response text: {response_text[:500]}")  # Log first 500 chars for debugging
+        logger.warning(f"Direct JSON parse failed: {e}. Attempting to extract JSON from response.")
+        logger.warning(f"Response text (first 1000 chars): {response_text[:1000]}")  # Log first 1000 chars for debugging
 
         # Use JSONDecoder.raw_decode to get the first valid JSON object (handles extra text after JSON)
         try:
             decoder = json.JSONDecoder()
             obj, idx = decoder.raw_decode(response_text.lstrip())
-            logger.debug(f"Successfully extracted JSON using raw_decode (parsed {idx} chars)")
+            logger.info(f"Successfully extracted JSON using raw_decode (parsed {idx} chars)")
             return obj
         except (json.JSONDecodeError, ValueError) as raw_decode_error:
-            logger.debug(f"raw_decode failed: {raw_decode_error}. Trying regex extraction.")
+            logger.warning(f"raw_decode failed: {raw_decode_error}. Trying regex extraction.")
 
         # Try to find JSON object in the response using regex
         json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
