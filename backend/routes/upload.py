@@ -11,7 +11,9 @@ from logger import logger
 from utils import extract_text_from_pdf_bytes, extract_text_from_docx_bytes
 from document_summary import (
     extract_structured_summary,
+    extract_structured_summaries_batch,
     store_document_summary,
+    store_document_summaries_batch,
     detect_cross_document_overlap,
     store_cross_document_summary
 )
@@ -45,8 +47,10 @@ async def upload_documents_stream(
         )
 
         try:
-            for idx, (name, data) in enumerate(file_data, start=1):
+            # PHASE 1: Extract text and chunk all files
+            processed_docs = []  # List of {name, doc_id, chunks}
 
+            for idx, (name, data) in enumerate(file_data, start=1):
                 # Send progress update: starting file
                 yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total_files, 'file_name': name, 'step': 1, 'total_steps': 6, 'status': 'Extracting text...'})}\n\n"
 
@@ -86,23 +90,47 @@ async def upload_documents_stream(
 
                 chunks = chunk_text(text)
 
-                # Send progress: generating summary
-                yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total_files, 'file_name': name, 'step': 3, 'total_steps': 6, 'status': 'Generating summary...'})}\n\n"
+                processed_docs.append({
+                    'name': name,
+                    'doc_id': safe_doc_id,
+                    'chunks': chunks
+                })
 
-                summary = None
+            # PHASE 2: Batch generate summaries for all documents
+            if processed_docs:
+                yield f"data: {json.dumps({'type': 'progress', 'status': 'Generating summaries for all documents...'})}\n\n"
+                logger.info(f"Batch generating summaries for {len(processed_docs)} documents")
+
+                summaries_map = {}  # Maps doc_id to summary
                 try:
-                    logger.info(f"Extracting structured summary for '{name}'...")
-                    summary = extract_structured_summary(
-                        doc_id=safe_doc_id,
-                        chunks=chunks,
-                        source=name,
-                        namespace=namespace
-                    )
+                    batch_docs = [{'doc_id': doc['doc_id'], 'chunks': doc['chunks'], 'source': doc['name']} for doc in processed_docs]
+                    summaries_list = extract_structured_summaries_batch(batch_docs, namespace, batch_size=3)
 
-                    # Send progress: storing summary
-                    yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total_files, 'file_name': name, 'step': 4, 'total_steps': 6, 'status': 'Storing summary...'})}\n\n"
+                    # Map summaries by doc_id for easy lookup
+                    for summary in summaries_list:
+                        summaries_map[summary['doc_id']] = summary
 
-                    store_document_summary(summary, namespace)
+                except CircuitBreakerOpenError as e:
+                    warning_msg = f"An error occurred during summary generation. Results may be less accurate."
+                    warnings.append(warning_msg)
+                    logger.warning(f"Batch summary generation failed: {e}")
+                    yield f"data: {json.dumps({'type': 'warning', 'message': warning_msg})}\n\n"
+
+            # PHASE 3: Batch store all summaries
+            if summaries_map:
+                yield f"data: {json.dumps({'type': 'progress', 'status': 'Storing all summaries...'})}\n\n"
+                logger.info(f"Batch storing {len(summaries_map)} summaries")
+                store_document_summaries_batch(list(summaries_map.values()), namespace)
+
+            # PHASE 4: Detect overlap and index chunks
+            for idx, doc in enumerate(processed_docs, start=1):
+                name = doc['name']
+                safe_doc_id = doc['doc_id']
+                chunks = doc['chunks']
+
+                summary = summaries_map.get(safe_doc_id)
+
+                if summary:
 
                     # Send progress: checking cross-doc overlap
                     yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total_files, 'file_name': name, 'step': 5, 'total_steps': 6, 'status': 'Analyzing document relationships...'})}\n\n"
@@ -114,12 +142,6 @@ async def upload_documents_stream(
                             f"{cross_summary['related_docs']}"
                         )
                         store_cross_document_summary(cross_summary, namespace)
-
-                except CircuitBreakerOpenError as e:
-                    warning_msg = f"An error occurred during summary generation. Results may be less accurate."
-                    warnings.append(warning_msg)
-                    logger.warning(f"Summary generation failed for '{name}': {e}")
-                    yield f"data: {json.dumps({'type': 'warning', 'message': warning_msg})}\n\n"
 
                 # Send progress: indexing chunks
                 yield f"data: {json.dumps({'type': 'progress', 'current': idx, 'total': total_files, 'file_name': name, 'step': 6, 'total_steps': 6, 'status': 'Indexing chunks...'})}\n\n"

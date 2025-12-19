@@ -79,3 +79,29 @@ def get_document_summary_schema() -> Dict[str, Any]:
         },
         "required": ["document_type", "primary_subject", "key_concepts", "key_facts", "topics"]
     }
+
+
+def get_batch_document_summary_schema(num_documents: int) -> Dict[str, Any]:
+    """
+    Get JSON schema for batch document summary extraction.
+
+    Args:
+        num_documents: Number of documents in the batch
+
+    Returns:
+        JSON schema dict
+    """
+    single_schema = get_document_summary_schema()
+
+    return {
+        "type": "object",
+        "properties": {
+            "documents": {
+                "type": "array",
+                "items": single_schema,
+                "minItems": num_documents,
+                "maxItems": num_documents
+            }
+        },
+        "required": ["documents"]
+    }
