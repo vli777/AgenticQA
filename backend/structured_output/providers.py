@@ -25,12 +25,20 @@ def extract_with_nvidia_guided_json(client: Any, prompt: str, schema: Dict[str, 
     """
     json_prompt = f"""{prompt}
 
-Return your response according to this JSON schema: {schema}"""
+Return ONLY valid JSON matching this schema (no markdown, no explanations):
+{json.dumps(schema, indent=2)}"""
 
-    response = client.invoke(
-        json_prompt,
-        guided_json=schema
-    )
+    # Try with model_kwargs for guided_json
+    try:
+        response = client.invoke(
+            json_prompt,
+            model_kwargs={"extra_body": {"guided_json": schema}}
+        )
+    except (TypeError, Exception) as e:
+        # Fallback: invoke without guided_json
+        logger.debug(f"guided_json not supported, falling back to regular invoke: {e}")
+        response = client.invoke(json_prompt)
+
     response_text = response.content if hasattr(response, 'content') else str(response)
 
     # Try direct parsing first
