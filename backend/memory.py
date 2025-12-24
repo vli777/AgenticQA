@@ -186,10 +186,10 @@ class MemoryManager:
         if topic.access_count < self.access_threshold_for_lt:
             return self.base_half_life_seconds
 
-        # Calculate LT memory half-life: double for each 5 accesses
-        # access_count=5: 2 days, 10: 4 days, 15: 8 days, 20: 16 days, 25+: 30 days
+        # Calculate LT memory half-life: start at 2x when threshold hit, then double every 5 more
+        # access_count=5-9: 2 days, 10-14: 4 days, 15-19: 8 days, 20-24: 16 days, 25+: 30 days
         accesses_beyond_threshold = topic.access_count - self.access_threshold_for_lt
-        multiplier = 2 ** (accesses_beyond_threshold // self.access_threshold_for_lt)
+        multiplier = 2 ** (1 + accesses_beyond_threshold // self.access_threshold_for_lt)
 
         half_life = min(
             self.base_half_life_seconds * multiplier,
