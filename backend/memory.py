@@ -3,8 +3,11 @@
 import time
 import uuid
 import threading
+import gzip
+import json
+import base64
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 
 import numpy as np
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
@@ -31,6 +34,7 @@ class TopicMemory:
     importance_score: float = 0.5
     embedding: Optional[np.ndarray] = None
     message_count: int = 0
+    compressed_messages: Optional[str] = None  # Base64-encoded gzip compressed message history
 
 
 @dataclass
@@ -54,6 +58,10 @@ class MemoryManager:
         with self._lock:
             conversation = self._conversations.setdefault(conversation_id, ConversationMemory())
             topic = self._match_or_create_topic(conversation, text, importance)
+
+            # Decompress messages if topic was previously compressed
+            self._restore_topic_if_compressed(topic)
+
             topic.messages.append(MessageEntry(role="user", content=text, timestamp=time.time()))
             topic.last_active_at = time.time()
             topic.message_count += 1
@@ -72,6 +80,10 @@ class MemoryManager:
             topic = conversation.topics.get(conversation.active_topic_id)
             if not topic:
                 return
+
+            # Decompress messages if topic was previously compressed
+            self._restore_topic_if_compressed(topic)
+
             topic.messages.append(MessageEntry(role="assistant", content=text, timestamp=time.time()))
             topic.last_active_at = time.time()
             topic.message_count += 1
@@ -149,6 +161,98 @@ class MemoryManager:
             return combined
         return combined / norm
 
+    def _compress_messages(self, messages: List[MessageEntry]) -> str:
+        """
+        Compress message history to save memory.
+
+        Returns:
+            Base64-encoded gzip compressed JSON string
+        """
+        try:
+            # Serialize messages to JSON
+            messages_data = [
+                {
+                    "role": msg.role,
+                    "content": msg.content,
+                    "timestamp": msg.timestamp
+                }
+                for msg in messages
+            ]
+            json_str = json.dumps(messages_data)
+
+            # Compress with gzip
+            compressed = gzip.compress(json_str.encode('utf-8'))
+
+            # Encode to base64 for safe storage
+            encoded = base64.b64encode(compressed).decode('ascii')
+
+            logger.debug(f"Compressed {len(messages)} messages: {len(json_str)} -> {len(compressed)} bytes")
+            return encoded
+        except Exception as exc:
+            logger.error(f"Failed to compress messages: {exc}")
+            return None
+
+    def _decompress_messages(self, compressed_data: str) -> List[MessageEntry]:
+        """
+        Decompress message history.
+
+        Args:
+            compressed_data: Base64-encoded gzip compressed JSON string
+
+        Returns:
+            List of MessageEntry objects
+        """
+        try:
+            # Decode from base64
+            compressed = base64.b64decode(compressed_data.encode('ascii'))
+
+            # Decompress with gzip
+            json_str = gzip.decompress(compressed).decode('utf-8')
+
+            # Deserialize from JSON
+            messages_data = json.loads(json_str)
+
+            messages = [
+                MessageEntry(
+                    role=msg["role"],
+                    content=msg["content"],
+                    timestamp=msg["timestamp"]
+                )
+                for msg in messages_data
+            ]
+
+            logger.debug(f"Decompressed {len(messages)} messages from {len(compressed)} bytes")
+            return messages
+        except Exception as exc:
+            logger.error(f"Failed to decompress messages: {exc}")
+            return []
+
+    def _restore_topic_if_compressed(self, topic: TopicMemory):
+        """
+        Restore full message history if topic has compressed messages.
+        This is called when a previously inactive topic becomes active again.
+        """
+        if not topic.compressed_messages:
+            return
+
+        try:
+            # Decompress old messages
+            old_messages = self._decompress_messages(topic.compressed_messages)
+
+            if old_messages:
+                # Combine old compressed messages with current active messages
+                # Sort by timestamp to maintain chronological order
+                all_messages = old_messages + topic.messages
+                all_messages.sort(key=lambda m: m.timestamp)
+
+                # Restore to active memory
+                topic.messages = all_messages
+                topic.compressed_messages = None  # Clear compressed storage
+
+                logger.info(f"Restored {len(old_messages)} compressed messages for topic '{topic.title}'")
+        except Exception as exc:
+            logger.warning(f"Failed to restore compressed messages for topic '{topic.title}': {exc}")
+
     def _compact_topic(self, topic: TopicMemory):
         if len(topic.messages) <= self.max_messages_per_topic:
             return
@@ -156,11 +260,29 @@ class MemoryManager:
         if not to_summarize:
             return
         try:
+            # Create summary of old messages
             summary_text = self._summarize_messages(topic.summary, to_summarize)
             topic.summary = summary_text
+
+            # Compress old messages instead of deleting them
+            # If we already have compressed messages, decompress them first
+            existing_compressed = []
+            if topic.compressed_messages:
+                existing_compressed = self._decompress_messages(topic.compressed_messages)
+
+            # Combine existing compressed messages with the ones we're about to compress
+            all_old_messages = existing_compressed + to_summarize
+
+            # Compress the full history
+            compressed_data = self._compress_messages(all_old_messages)
+            if compressed_data:
+                topic.compressed_messages = compressed_data
+                logger.info(f"Compressed {len(all_old_messages)} messages for topic '{topic.title}'")
+
+            # Keep only recent messages in active memory
             topic.messages = topic.messages[-self.recent_message_keep:]
         except Exception as exc:
-            logger.warning(f"Failed to summarize topic '{topic.title}': {exc}")
+            logger.warning(f"Failed to compact topic '{topic.title}': {exc}")
 
     def _summarize_messages(self, previous_summary: Optional[str], messages: List[MessageEntry]) -> str:
         history = "\n".join(f"{msg.role}: {msg.content}" for msg in messages)
@@ -201,6 +323,88 @@ class MemoryManager:
             return ""
         parts = [f"{entry['role']}: {entry['content']}" for entry in history]
         return "\n".join(parts)
+
+    def get_full_topic_history(self, conversation_id: str, include_compressed: bool = True) -> List[Dict[str, str]]:
+        """
+        Get the complete conversation history for the active topic, including compressed messages.
+
+        Args:
+            conversation_id: Conversation identifier
+            include_compressed: If True, decompress and include old messages
+
+        Returns:
+            List of message dictionaries in chronological order
+        """
+        with self._lock:
+            conversation = self._conversations.get(conversation_id)
+            if not conversation or not conversation.active_topic_id:
+                return []
+
+            topic = conversation.topics.get(conversation.active_topic_id)
+            if not topic:
+                return []
+
+            all_messages = []
+
+            # Include compressed messages if requested
+            if include_compressed and topic.compressed_messages:
+                try:
+                    old_messages = self._decompress_messages(topic.compressed_messages)
+                    all_messages.extend(old_messages)
+                except Exception as exc:
+                    logger.warning(f"Failed to decompress messages for full history: {exc}")
+
+            # Add current active messages
+            all_messages.extend(topic.messages)
+
+            # Sort by timestamp to ensure chronological order
+            all_messages.sort(key=lambda m: m.timestamp)
+
+            # Convert to dictionary format
+            return [
+                {
+                    "role": msg.role,
+                    "content": msg.content,
+                    "timestamp": msg.timestamp
+                }
+                for msg in all_messages
+            ]
+
+    def get_topic_stats(self, conversation_id: str) -> Dict[str, Any]:
+        """
+        Get statistics about the current topic's memory usage.
+
+        Returns:
+            Dictionary with stats about active messages, compressed messages, etc.
+        """
+        with self._lock:
+            conversation = self._conversations.get(conversation_id)
+            if not conversation or not conversation.active_topic_id:
+                return {}
+
+            topic = conversation.topics.get(conversation.active_topic_id)
+            if not topic:
+                return {}
+
+            compressed_count = 0
+            if topic.compressed_messages:
+                try:
+                    old_messages = self._decompress_messages(topic.compressed_messages)
+                    compressed_count = len(old_messages)
+                except Exception:
+                    pass
+
+            return {
+                "topic_id": topic.id,
+                "topic_title": topic.title,
+                "active_messages": len(topic.messages),
+                "compressed_messages": compressed_count,
+                "total_messages": len(topic.messages) + compressed_count,
+                "has_summary": bool(topic.summary),
+                "importance_score": topic.importance_score,
+                "age_seconds": time.time() - topic.created_at,
+                "inactive_seconds": time.time() - topic.last_active_at
+            }
 
 
 conversation_memory_manager = MemoryManager()
