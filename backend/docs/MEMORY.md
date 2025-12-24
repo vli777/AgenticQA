@@ -40,6 +40,7 @@ class TopicMemory:
     embedding: Optional[np.ndarray]      # Topic embedding for similarity matching
     message_count: int                   # Total message count
     compressed_messages: Optional[str]   # Base64-encoded gzip compressed history
+    access_count: int                    # Number of accesses (for LT memory consolidation)
 ```
 
 ## Memory Lifecycle
@@ -76,29 +77,52 @@ When a topic exceeds `max_messages_per_topic` (default: 12):
 
 **Compression Ratio**: Typically 70-90% size reduction (e.g., 10KB → 1-3KB)
 
-### 3. Topic Decay
+### 3. Topic Decay (Mimics Human Memory)
+
+The decay system mimics human memory consolidation from short-term to long-term memory.
 
 When conversation has > `max_topics` (default: 20):
 
 ```
-1. Calculate priority for each topic:
+1. Calculate dynamic half-life for each topic:
+   - New topics (< 5 accesses): 1 day half-life (short-term memory)
+   - Frequent topics (5+ accesses): 2-30 days half-life (long-term memory)
+   - Half-life doubles every 5 accesses (up to 30-day max)
+
+2. Calculate priority:
    priority = importance_score × decay_factor
-
    where decay_factor = 0.5^(age_seconds / half_life_seconds)
-   half_life = 1 day (86400 seconds)
 
-2. Sort topics by priority (lowest first)
-3. Remove topics with priority < 0.05
-4. Skip active topic (never remove)
+3. Sort topics by priority (lowest first)
+4. Remove topics with priority < 0.05
+5. Skip active topic (never remove)
 ```
 
-**Example Decay Timeline**:
+**Short-Term Memory (< 5 accesses, 1-day half-life)**:
 - 0 days: priority = 1.0 (100%)
 - 1 day: priority = 0.5 (50%)
 - 2 days: priority = 0.25 (25%)
 - 3 days: priority = 0.125 (12.5%)
 - 4 days: priority = 0.0625 (6.25%)
 - 5 days: priority = 0.03125 (3.1% - deleted)
+
+**Long-Term Memory (20+ accesses, 16-day half-life)**:
+- 0 days: priority = 1.0 (100%)
+- 16 days: priority = 0.5 (50%)
+- 32 days: priority = 0.25 (25%)
+- 48 days: priority = 0.125 (12.5%)
+- 64 days: priority = 0.0625 (6.25%)
+- 80 days: priority = 0.03125 (3.1% - deleted)
+
+**Memory Consolidation Timeline**:
+| Accesses | Half-Life | Memory Type | Survival Time (to <5% priority) |
+|----------|-----------|-------------|----------------------------------|
+| 0-4 | 1 day | Short-term | ~5 days |
+| 5-9 | 2 days | Transitioning | ~10 days |
+| 10-14 | 4 days | Long-term | ~20 days |
+| 15-19 | 8 days | Long-term | ~40 days |
+| 20-24 | 16 days | Long-term | ~80 days |
+| 25+ | 30 days (max) | Long-term | ~150 days |
 
 ### 4. Auto-Decompression on Access
 
@@ -122,7 +146,9 @@ Default settings in `MemoryManager.__init__()`:
 |-----------|---------|-------------|
 | `max_topics` | 20 | Maximum topics per conversation before decay |
 | `similarity_threshold` | 0.7 | Cosine similarity threshold for topic matching |
-| `half_life_seconds` | 86400 | Decay half-life (1 day) |
+| `base_half_life_seconds` | 86400 | Base decay half-life for short-term memory (1 day) |
+| `max_half_life_seconds` | 2592000 | Maximum half-life for long-term memory (30 days) |
+| `access_threshold_for_lt` | 5 | Accesses needed to start long-term consolidation |
 | `max_messages_per_topic` | 12 | Messages before compression triggers |
 | `recent_message_keep` | 4 | Recent messages to keep in active memory |
 
@@ -175,6 +201,9 @@ stats = conversation_memory_manager.get_topic_stats("user123")
 #     "total_messages": 12,
 #     "has_summary": True,
 #     "importance_score": 0.5,
+#     "access_count": 15,
+#     "memory_type": "long-term",
+#     "half_life_days": 8.0,
 #     "age_seconds": 3600,
 #     "inactive_seconds": 120
 # }
@@ -280,10 +309,12 @@ conversation_memory_manager.add_assistant_message(conv_id, answer)
 1. **Full History Preservation**: Nothing is lost - all messages are preserved
 2. **Low Memory Footprint**: 70-90% reduction through compression
 3. **LRU-Based Efficiency**: Hot topics stay decompressed, cold topics compressed
-4. **Automatic Decay**: Old, unimportant topics are removed to prevent memory bloat
-5. **Seamless UX**: Decompression is automatic and transparent
-6. **Context-Aware**: Topic summaries + recent messages provide optimal context
-7. **Thread-Safe**: All operations protected by locks
+4. **Human-Like Memory**: Mimics short-term to long-term memory consolidation
+5. **Adaptive Decay**: Frequently accessed topics survive 16x longer than new ones
+6. **Automatic Decay**: Old, unimportant topics are removed to prevent memory bloat
+7. **Seamless UX**: Decompression is automatic and transparent
+8. **Context-Aware**: Topic summaries + recent messages provide optimal context
+9. **Thread-Safe**: All operations protected by locks
 
 ## Future Enhancements
 
