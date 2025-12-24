@@ -35,6 +35,7 @@ class TopicMemory:
     embedding: Optional[np.ndarray] = None
     message_count: int = 0
     compressed_messages: Optional[str] = None  # Base64-encoded gzip compressed message history
+    access_count: int = 0  # Number of times topic has been accessed (for LT memory consolidation)
 
 
 @dataclass
@@ -49,7 +50,9 @@ class MemoryManager:
         self._lock = threading.Lock()
         self.max_topics = 20
         self.similarity_threshold = 0.7
-        self.half_life_seconds = 3600 * 24  # one day
+        self.base_half_life_seconds = 3600 * 24  # 1 day (short-term memory)
+        self.max_half_life_seconds = 3600 * 24 * 30  # 30 days (long-term memory cap)
+        self.access_threshold_for_lt = 5  # Accesses needed to start LT consolidation
         self.max_messages_per_topic = 12
         self.recent_message_keep = 4
         self.summary_llm = ChatNVIDIA(model="meta/llama-4-maverick-17b-128e-instruct", temperature=0.0)
@@ -61,6 +64,9 @@ class MemoryManager:
 
             # Decompress messages if topic was previously compressed
             self._restore_topic_if_compressed(topic)
+
+            # Increment access count (for LT memory consolidation)
+            topic.access_count += 1
 
             topic.messages.append(MessageEntry(role="user", content=text, timestamp=time.time()))
             topic.last_active_at = time.time()
@@ -83,6 +89,9 @@ class MemoryManager:
 
             # Decompress messages if topic was previously compressed
             self._restore_topic_if_compressed(topic)
+
+            # Increment access count (assistant messages also count as engagement)
+            topic.access_count += 1
 
             topic.messages.append(MessageEntry(role="assistant", content=text, timestamp=time.time()))
             topic.last_active_at = time.time()
@@ -160,6 +169,34 @@ class MemoryManager:
         if norm == 0:
             return combined
         return combined / norm
+
+    def _get_topic_half_life(self, topic: TopicMemory) -> float:
+        """
+        Calculate dynamic half-life based on access patterns (mimics human memory consolidation).
+
+        Short-term memory (infrequent access): Fast decay (~1 day)
+        Long-term memory (frequent access): Slow decay (up to 30 days)
+
+        Each access after threshold doubles the half-life (up to max).
+
+        Returns:
+            Half-life in seconds
+        """
+        # New or infrequent topics: use base half-life (short-term memory)
+        if topic.access_count < self.access_threshold_for_lt:
+            return self.base_half_life_seconds
+
+        # Calculate LT memory half-life: double for each 5 accesses
+        # access_count=5: 2 days, 10: 4 days, 15: 8 days, 20: 16 days, 25+: 30 days
+        accesses_beyond_threshold = topic.access_count - self.access_threshold_for_lt
+        multiplier = 2 ** (accesses_beyond_threshold // self.access_threshold_for_lt)
+
+        half_life = min(
+            self.base_half_life_seconds * multiplier,
+            self.max_half_life_seconds
+        )
+
+        return half_life
 
     def _compress_messages(self, messages: List[MessageEntry]) -> str:
         """
@@ -304,17 +341,36 @@ class MemoryManager:
         priorities = []
         for topic in conversation.topics.values():
             age = max(0.0, now - topic.last_active_at)
-            decay = 0.5 ** (age / self.half_life_seconds)
+
+            # Dynamic half-life based on access patterns (ST vs LT memory)
+            half_life = self._get_topic_half_life(topic)
+
+            decay = 0.5 ** (age / half_life)
             priority = topic.importance_score * decay
-            priorities.append((priority, topic.id))
+            priorities.append((priority, topic.id, half_life))
 
         priorities.sort()
 
+        # Log decay information for transparency
+        for priority, topic_id, half_life in priorities[:3]:  # Show bottom 3
+            topic = conversation.topics[topic_id]
+            age_days = (now - topic.last_active_at) / 86400
+            logger.debug(
+                f"Topic '{topic.title[:40]}': priority={priority:.3f}, "
+                f"age={age_days:.1f}d, accesses={topic.access_count}, "
+                f"half_life={half_life/86400:.1f}d"
+            )
+
         while len(conversation.topics) > self.max_topics and priorities:
-            priority, topic_id = priorities.pop(0)
+            priority, topic_id, half_life = priorities.pop(0)
             if conversation.active_topic_id == topic_id:
                 continue
             if priority < 0.05:
+                topic = conversation.topics[topic_id]
+                logger.info(
+                    f"Removing topic '{topic.title[:40]}' (priority={priority:.3f}, "
+                    f"accesses={topic.access_count})"
+                )
                 del conversation.topics[topic_id]
 
     def get_context_text(self, conversation_id: str) -> str:
@@ -394,6 +450,10 @@ class MemoryManager:
                 except Exception:
                     pass
 
+            # Calculate current half-life and memory type
+            half_life = self._get_topic_half_life(topic)
+            memory_type = "long-term" if topic.access_count >= self.access_threshold_for_lt else "short-term"
+
             return {
                 "topic_id": topic.id,
                 "topic_title": topic.title,
@@ -402,6 +462,9 @@ class MemoryManager:
                 "total_messages": len(topic.messages) + compressed_count,
                 "has_summary": bool(topic.summary),
                 "importance_score": topic.importance_score,
+                "access_count": topic.access_count,
+                "memory_type": memory_type,
+                "half_life_days": half_life / 86400,
                 "age_seconds": time.time() - topic.created_at,
                 "inactive_seconds": time.time() - topic.last_active_at
             }
