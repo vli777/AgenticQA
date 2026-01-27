@@ -46,8 +46,15 @@ async def init_embeddings():
         logger.info("Embedding model initialized: %s", EMBEDDING_MODEL)
     except Exception:
         logger.exception("Embedding warm-up failed; requests will compute on demand")
-    
+
+
 @app.get("/")
 def root():
     return {"message": "AgenticQA running"}
+
+
+@app.get("/health")
+def health():
+    """Lightweight health check endpoint for keepalive pings."""
+    return {"status": "ok"}
 
