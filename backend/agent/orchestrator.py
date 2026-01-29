@@ -1,215 +1,27 @@
-# backend/langchain_agent.py
+# backend/agent/orchestrator.py
 
-import re
-from typing import List, Any, Dict, TypedDict, Optional, Literal
+"""
+Agent orchestration: sync and streaming entry points for the QA pipeline.
 
-from pydantic import BaseModel, Field
-from langchain_core.tools import Tool
+Coordinates tools, planner, and composer to execute the full QA workflow.
+"""
+
+from typing import List, Any, Dict, Optional
+
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
 from langchain_core.runnables import RunnableLambda
 
-from config import VECTOR_K
-from services import clean_text  # reuse the shared cleaner
+from logger import logger
 from document_summary import (
     list_documents_in_namespace,
-    get_document_summary,
     search_summaries,
-    fetch_full_document
+    fetch_full_document,
 )
-from logger import logger
 
-# --- Keep thresholds aligned with qa.py ---
-PRIMARY_SIMILARITY_THRESHOLD = 0.6
-FALLBACK_SIMILARITY_THRESHOLD = 0.4
-MAX_MATCHES_TO_RETURN = 3
-
-
-class AgentOutput(TypedDict):
-    answer: str
-    reasoning: List[str]
-    sources: Optional[List[str]]
-
-
-# ---------------------------
-# Pydantic Models for Structured Outputs
-# ---------------------------
-
-class QueryPlan(BaseModel):
-    """Structured output for query planning with multiple search variations."""
-    queries: List[str] = Field(
-        description="List of concise keyword variations for document search (synonyms, related terminology, abbreviations). Each variation should be under 20 words."
-    )
-
-
-class VerificationVerdict(BaseModel):
-    """Structured output for answer verification against evidence."""
-    verdict: Literal["SUPPORTED", "PARTIAL", "UNSUPPORTED"] = Field(
-        description=(
-            "SUPPORTED: answer is explicitly stated or directly implied in evidence. "
-            "PARTIAL: some parts match but important details are missing/unclear. "
-            "UNSUPPORTED: answer goes beyond evidence, contradicts it, or lacks access."
-        )
-    )
-
-
-class AnswerWithCitations(BaseModel):
-    """Structured output for answer with source citations."""
-    answer: str = Field(
-        description="The answer to the question based on the provided documents"
-    )
-    sources_used: List[str] = Field(
-        description="List of document filenames that were actually used to formulate the answer (only include documents that contributed to the answer)"
-    )
-
-
-# ---------------------------
-# Agent Tools
-# ---------------------------
-
-def _list_documents_tool(namespace: str = "default") -> Tool:
-    """
-    Tool to list all documents in the namespace.
-    Useful for answering "what files do you have?" or "what documents are available?"
-    """
-    def list_fn(query: str = "") -> str:
-        docs = list_documents_in_namespace(namespace, limit=50)
-
-        if not docs:
-            return "No documents found in this namespace."
-
-        # Format as readable list
-        lines = [f"Found {len(docs)} document(s):\n"]
-        for i, doc in enumerate(docs, 1):
-            topics_str = ", ".join(doc.get("topics", [])[:3])
-            lines.append(
-                f"{i}. {doc['source']} (ID: {doc['doc_id']}, Type: {doc.get('document_type', 'unknown')}, "
-                f"Topics: {topics_str})"
-            )
-
-        return "\n".join(lines)
-
-    return Tool(
-        name="list_documents",
-        func=list_fn,
-        description="List all available documents in the knowledge base. Use this when the user asks 'what files do you have?' or 'what documents are available?' or 'show me what's uploaded'."
-    )
-
-
-def _get_document_summary_tool(namespace: str = "default") -> Tool:
-    """
-    Tool to get structured summary with citations for a specific document.
-    This should be the PRIMARY tool for broad questions about a document.
-    """
-    def summary_fn(doc_id: str) -> str:
-        summary = get_document_summary(doc_id, namespace)
-
-        if not summary:
-            return f"No summary found for document '{doc_id}'. Use list_documents to see available documents."
-
-        # Format summary with citations
-        lines = [
-            f"Document: {summary['source']}",
-            f"Type: {summary.get('document_type', 'unknown')}",
-            f"Subject: {summary.get('primary_subject', 'N/A')}",
-            f"\nTopics: {', '.join(summary.get('topics', []))}",
-            "\nKey Concepts:"
-        ]
-
-        for concept in summary.get("key_concepts", [])[:10]:
-            chunk_refs = concept.get("chunk_refs", [])
-            context = concept.get("context", "N/A")
-            refs_str = f"[chunks: {', '.join(map(str, chunk_refs))}]" if chunk_refs else ""
-            lines.append(f"  - {concept.get('concept', 'N/A')}: {context} {refs_str}")
-
-        lines.append("\nKey Facts:")
-        for fact in summary.get("key_facts", [])[:15]:
-            chunk_refs = fact.get("chunk_refs", [])
-            refs_str = f"[chunks: {', '.join(map(str, chunk_refs))}]" if chunk_refs else ""
-            lines.append(f"  - {fact.get('fact', 'N/A')} {refs_str}")
-
-        lines.append(f"\nTotal chunks: {summary.get('chunk_count', 0)}")
-
-        return "\n".join(lines)
-
-    return Tool(
-        name="get_document_summary",
-        func=summary_fn,
-        description="Get a structured summary of a specific document with key facts and entities. Use this for broad questions like 'what is this about?', 'summarize this document', or 'what are the main points?'. Input should be the doc_id from list_documents."
-    )
-
-
-def _pinecone_search_tool(namespace: str = "default") -> Tool:
-    """
-    Vector search tool using NVIDIA Llama 3.2 embeddings with reranking.
-    Returns top-ranked evidence snippets with provenance tags.
-    """
-
-    def search_fn(query: str) -> str:
-        # Use hybrid search with re-ranking
-        # Use sync wrapper to avoid event loop conflicts
-        from hybrid_search import hybrid_search_sync
-
-        reranked_results = hybrid_search_sync(
-            query=query,
-            namespace=namespace,
-            top_k=MAX_MATCHES_TO_RETURN,
-            vector_k=VECTOR_K
-        )
-
-        if not reranked_results:
-            return "No results."
-
-        # Format provenance-tagged snippets
-        lines: List[str] = []
-        for result in reranked_results:
-            md = result.get("metadata") or {}
-            text = clean_text(md.get("text") or "")
-            if not text or len(text) < 50:
-                continue
-            source = md.get("source") or md.get("file_name") or "unknown"
-            section = md.get("section_index") or md.get("chunk_id")
-            score = result.get("rerank_score", 0.0)
-            prov = f"{source}::section-{section}" if section is not None else source
-
-            # Trim to ~1000 chars on sentence boundaries
-            if len(text) > 1000:
-                pieces = re.split(r"([.!?])\s+", text)
-                buf = ""
-                for i in range(0, len(pieces), 2):
-                    s = pieces[i] + (pieces[i + 1] if i + 1 < len(pieces) else "")
-                    if len(buf) + len(s) > 1000:
-                        break
-                    buf += s + " "
-                text = buf.strip()
-
-            lines.append(f"[{prov}] (rerank_score: {score:.3f}) {text}")
-
-        return "\n\n".join(lines) if lines else "No meaningful text chunks found."
-
-    return Tool(
-        name="semantic_search",
-        func=search_fn,
-        description="Search the indexed knowledge base using NVIDIA Llama 3.2 vector embeddings with reranking. Returns up to 3 evidence snippets with provenance like [source::section-X] …",
-    )
-
-
-# ---------------------------
-# Agent construction (Zero-shot ReAct) — manages scratchpad internally
-# ---------------------------
-def _extract_sources(obs: str, limit: int = 5) -> List[str]:
-    if not isinstance(obs, str):
-        return []
-    out: List[str] = []
-    seen = set()
-    for ln in obs.splitlines():
-        ln = ln.strip()
-        if ln.startswith("["):
-            if ln not in seen:
-                out.append(ln)
-                seen.add(ln)
-            if len(out) >= limit:
-                break
-    return out
+from .models import AgentOutput, AnswerWithCitations
+from .tools import _list_documents_tool, _get_document_summary_tool, _pinecone_search_tool
+from .planner import _plan_search_queries
+from .composer import _compose_answer, _verify_answer, _extract_sources
 
 
 def get_agent(namespace: str = "default", tools: list = None):
@@ -240,124 +52,6 @@ def get_agent(namespace: str = "default", tools: list = None):
     summary_tool = tool_map.get("get_document_summary")
 
     llm = ChatNVIDIA(model="meta/llama-4-maverick-17b-128e-instruct", temperature=0.0)
-
-    def _plan_search_queries(question: str, max_variations: int = 4) -> List[str]:
-        """
-        Ask the LLM to propose related keyword variations so search can cover synonyms/concepts.
-        Returns the original query plus up to (max_variations-1) alternates.
-        Uses Pydantic structured output for reliable parsing.
-        """
-        prompt = (
-            "You are a query planner for document search. Given a user's question, list concise keyword "
-            "variations that capture different angles (synonyms, related terminology, abbreviations). "
-            "Keep each variation under 20 words and prioritize distinct wording.\n\n"
-            f"Question: {question}"
-        )
-
-        planned_variations: List[str] = []
-        try:
-            # Use structured output with Pydantic model
-            structured_llm = llm.with_structured_output(QueryPlan)
-            response = structured_llm.invoke(prompt)
-            planned_variations = response.queries
-        except Exception as e:
-            # If structured output fails, fall back to original query only
-            logger.warning(f"Query planning failed with structured output: {e}, using original query only")
-            planned_variations = []
-
-        deduped: List[str] = []
-        seen = set()
-        for candidate in [question] + planned_variations:
-            cleaned = " ".join((candidate or "").split())
-            if not cleaned:
-                continue
-            lowered = cleaned.lower()
-            if lowered in seen:
-                continue
-            seen.add(lowered)
-            deduped.append(cleaned)
-            if len(deduped) >= max_variations:
-                break
-
-        return deduped or [question]
-
-    def _compose_answer(question: str, evidence: str, chat_history: Optional[List[Dict[str, str]]] = None) -> str:
-        """Compose a natural, conversational answer grounded in evidence."""
-        history_section = ""
-        if chat_history:
-            history_lines = "\n".join(f"{item['role']}: {item['content']}" for item in chat_history)
-            history_section = f"\n\nRecent conversation:\n{history_lines}\n"
-        if not evidence or evidence.strip().lower() in {"no results.", "no meaningful text chunks found."}:
-            return "I don't see information about that in the documents."
-
-        prompt = (
-            "You are a helpful assistant that answers questions using the provided evidence.\n"
-            "You DO have access to all of the evidence text shown below; treat it as your only source of truth.\n"
-            "Rules:\n"
-            "1. Directly answer the user's question using ONLY the evidence.\n"
-            "2. Do NOT mention tools, PDFs, file formats, or that you \"don't have access\" to something.\n"
-            "3. Do NOT describe how search or retrieval was done.\n"
-            "4. If evidence clearly answers the question: give a direct, confident answer.\n"
-            "5. If evidence is partial or uncertain: say so explicitly, but still answer as best you can.\n"
-            "6. If there is no relevant evidence at all, say exactly: \"I don't see information about that in the documents.\"\n"
-            "7. Keep answers concise (1-3 sentences) and natural.\n\n"
-            f"Question: {question}\n"
-            f"{history_section}\n"
-            f"Evidence:\n{evidence}\n\n"
-            "Answer:"
-        )
-        response = llm.invoke(prompt)
-        text = getattr(response, "content", "").strip()
-        if not text:
-            return "I don't see information about that in the documents."
-        return text
-
-    def _verify_answer(question: str, evidence: str, answer: str) -> str:
-        """
-        Verify whether the answer is supported by the evidence.
-        Uses Pydantic structured output for reliable verdict parsing.
-        """
-        if not answer:
-            return "UNSUPPORTED"
-
-        lower = answer.strip().lower()
-
-        # Treat meta/limitation answers as unsupported
-        if any(phrase in lower for phrase in [
-            "i don't have access",
-            "i do not have access",
-            "i can't access",
-            "i cannot access",
-            "i don't have the content",
-            "i do not have the content",
-            "i would need access",
-            "i need access to",
-            "the pdf",
-            "the document is not",
-        ]):
-            logger.warning(f"Answer contains meta-talk about access/tools, marking UNSUPPORTED: '{answer[:100]}'")
-            return "UNSUPPORTED"
-
-        if lower == "the documents do not clearly specify this.":
-            return "UNSUPPORTED"
-
-        prompt = (
-            "You are a strict fact checker. "
-            "Given a question, an answer, and evidence snippets, determine the verification verdict.\n\n"
-            f"Question:\n{question}\n\n"
-            f"Answer:\n{answer}\n\n"
-            f"Evidence:\n{evidence}\n"
-        )
-
-        try:
-            # Use structured output with Pydantic model
-            structured_llm = llm.with_structured_output(VerificationVerdict)
-            response = structured_llm.invoke(prompt)
-            return response.verdict
-        except Exception as e:
-            # Fallback to PARTIAL if structured output fails
-            logger.warning(f"Verification failed with structured output: {e}, defaulting to PARTIAL")
-            return "PARTIAL"
 
     def _invoke(inputs: Dict[str, Any] | str) -> AgentOutput:
         # Normalize input
@@ -494,7 +188,7 @@ def get_agent(namespace: str = "default", tools: list = None):
             logger.info("Falling back to full semantic search")
             reasoning.append("Summary search yielded no results, using detailed semantic search")
 
-            planned_queries = _plan_search_queries(question, max_variations=4)
+            planned_queries = _plan_search_queries(llm, question, max_variations=4)
             for query in planned_queries:
                 obs = search_tool(query)
                 observations.append(obs)
@@ -509,8 +203,8 @@ def get_agent(namespace: str = "default", tools: list = None):
             sources = _extract_sources(merged_evidence, limit=5)
 
         # Phase 2: compose and verify answer
-        draft_answer = _compose_answer(question, merged_evidence, history)
-        verdict = _verify_answer(question, merged_evidence, draft_answer)
+        draft_answer = _compose_answer(llm, question, merged_evidence, history)
+        verdict = _verify_answer(llm, question, merged_evidence, draft_answer)
 
         # Use more natural fallback language
         if verdict == "UNSUPPORTED":
