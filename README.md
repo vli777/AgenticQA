@@ -3,7 +3,7 @@
   AgenticQA is a document-centric Q&A system that feels like a careful research assistant. Upload PDF or text files, ask
   natural language questions, and receive answers that cite supporting passages. The backend runs a conversation-aware
   retrieval agent that plans searches, rewrites follow-up questions, and verifies every response against the evidence
-  before replying. It uses streaming responses with SSE + EventSource to surface LLM activity status. 
+  before replying. Memory is inspired by human memory retrieval, with compression and storage attuned to access frequency and recency. It uses streaming responses with SSE + EventSource to surface LLM activity status. 
   
 <img width="1189" height="746" alt="image" src="https://github.com/user-attachments/assets/757c7089-c9d1-4c78-b62e-c1424e8b5dec" />
 
