@@ -1,45 +1,22 @@
-# backend/qa.py
+# backend/routes/qa.py
 
-import re
 import json
 from typing import Dict, List
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
-# from langchain_openai import ChatOpenAI
 
 from logger import logger
-from config import (
-    VECTOR_K,
-    ENABLE_CACHING, ENABLE_STREAMING
-)
-from models import AskRequest
-
-DEFAULT_NAMESPACE = "default"
-from langchain_agent import get_agent
-from langchain_core.output_parsers.json import JsonOutputParser
-from hybrid_search import hybrid_search_engine
+from config import ENABLE_CACHING
 from memory import conversation_memory_manager
 
 if ENABLE_CACHING:
-    from cache import search_cache, get_all_cache_stats, clear_all_caches
+    from cache import get_all_cache_stats, clear_all_caches
 
-json_parser = JsonOutputParser()
+DEFAULT_NAMESPACE = "default"
 
-# Tune retrieval sensitivity
-PRIMARY_SIMILARITY_THRESHOLD = 0.6
-FALLBACK_SIMILARITY_THRESHOLD = 0.4
-MAX_MATCHES_TO_RETURN = 3
-
-# Initialize LLM - using NVIDIA by default
+# LLM for query rewriting
 llm = ChatNVIDIA(model="meta/llama-4-maverick-17b-128e-instruct", temperature=0.0)
-
-# if OPENAI_API_KEY:
-#     llm = ChatOpenAI(
-#         model="gpt-4",
-#         temperature=0.0,
-#         openai_api_key=OPENAI_API_KEY
-#     )
 
 router = APIRouter()
 
@@ -89,41 +66,6 @@ def _rewrite_query(question: str, history: List[Dict[str, str]]) -> str:
         logger.warning(f"Query rewrite failed: {exc}")
     return question
 
-def clean_text(text: str) -> str:
-    """Clean and format text for better readability."""
-    # Remove extra whitespace
-    text = re.sub(r'\s+', ' ', text)
-    # Fix spacing around numbers
-    text = re.sub(r'(\d+)\s+', r'\1 ', text)
-    # Fix spacing after punctuation
-    text = re.sub(r'([.!?])\s+', r'\1 ', text)
-    # Remove page numbers at the end
-    text = re.sub(r'\s+\d+$', '', text)
-    # Remove leading/trailing whitespace
-    text = text.strip()
-    # Ensure proper sentence structure
-    if text and not text[0].isupper():
-        text = text[0].upper() + text[1:]
-    if text and text[-1] not in '.!?':
-        text += '.'
-    return text
-
-async def improve_grammar(text: str) -> str:
-    """Use LLM to improve grammar and formatting."""
-    prompt = f"""Please improve the grammar and formatting of this text while preserving its meaning. 
-    Fix any broken sentences, add proper spacing, and ensure proper capitalization.
-    Only return the improved text, nothing else.
-
-    Text: {text}"""
-    
-    try:
-        response = await llm.ainvoke(prompt)
-        return response.content.strip()
-    except Exception as e:
-        logger.error(f"Error improving grammar: {str(e)}")
-        return text  # Return original text if LLM fails
-
-
 @router.get("/")
 async def ask(
     question: str,
@@ -148,7 +90,7 @@ async def ask(
             logger.info(f"Rewrote agentic question '{question}' -> '{standalone_question}'")
 
         # Get streaming agent
-        from langchain_agent import get_streaming_agent
+        from agent import get_streaming_agent
 
         try:
             agent_generator = await get_streaming_agent(namespace=namespace)

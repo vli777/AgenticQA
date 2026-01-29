@@ -6,13 +6,12 @@ from typing import List
 import re
 import json
 
-from services import upsert_doc, chunk_text
+from indexing import upsert_doc
+from utils.text_processing import chunk_text
 from logger import logger
-from utils import extract_text_from_pdf_bytes, extract_text_from_docx_bytes
+from utils.file_extraction import extract_text_from_pdf_bytes, extract_text_from_docx_bytes
 from document_summary import (
-    extract_structured_summary,
     extract_structured_summaries_batch,
-    store_document_summary,
     store_document_summaries_batch,
     detect_cross_document_overlap,
     store_cross_document_summary
