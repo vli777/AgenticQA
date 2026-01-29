@@ -223,10 +223,10 @@ RETRIEVAL_TOP_K=3   # Enough context for LLM
 
 ### Files
 
-- `backend/hybrid_search.py` - NVIDIA-optimized search engine (hybrid_search.py:1-354)
-- `backend/routes/qa.py` - Integration with QA endpoint (qa.py:19)
-- `backend/langchain_agent.py` - Integration with agentic tools (langchain_agent.py:141-193)
-- `backend/semantic_tags.py` - Automatic query classification
+- `backend/hybrid_search.py` - NVIDIA-optimized search engine
+- `backend/routes/qa.py` - Integration with QA endpoint
+- `backend/agent/` - Agentic orchestration package (tools, planner, composer, orchestrator)
+- `backend/semantic_tags/` - Automatic query classification (extractor, query inference, clients)
 - `backend/config.py` - Configuration and environment variables
 
 ### API Endpoints

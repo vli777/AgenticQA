@@ -337,7 +337,7 @@ Step 3: Fallback (if no summaries found)
 - **Lower cost** - fewer embedding API calls
 - **Higher accuracy** - LLM reasons over complete documents
 
-See `langchain_agent.py:449-491` for implementation.
+See `agent/orchestrator.py` for implementation.
 
 ## 4. Embedding Batching
 
